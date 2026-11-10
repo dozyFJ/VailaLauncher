@@ -167,6 +167,11 @@ def main():
         p = find_sql(name)
         if not p:
             if name in ("mysql_system_tables.sql", "mysql_system_tables_data.sql"):
+                for root, _d, files in os.walk(usr):
+                    for fn in files:
+                        if fn.endswith(".sql") or "install" in fn or "errmsg" in fn:
+                            print("  have:", os.path.relpath(os.path.join(root, fn), usr))
+                print("  bin:", sorted(os.listdir(os.path.join(usr, "bin"))))
                 sys.exit(f"{name} not found")
             continue
         print("bootstrap:", p)
