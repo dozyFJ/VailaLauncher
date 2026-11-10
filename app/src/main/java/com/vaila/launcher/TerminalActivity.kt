@@ -85,23 +85,7 @@ class TerminalActivity : Activity() {
             echo "VailaLauncher terminal. www = папка сайта, mysql = консоль базы, php -v"
             """.trimIndent() + "\n"
         )
-        return arrayOf(
-            "HOME=${home.path}",
-            "ENV=${rc.path}",
-            "TMPDIR=${st.tmp.path}",
-            "PHPRC=${st.etc.path}",
-            "PREFIX=${st.usr.path}",
-            "WWW=${st.htdocs.path}",
-            "PATH=${st.bin.path}:/system/bin:/system/xbin",
-            "LD_LIBRARY_PATH=${st.lib.path}",
-            "TERMINFO=${File(st.share, "terminfo").path}",
-            "TERM=xterm-256color",
-            "COLORTERM=truecolor",
-            "LANG=en_US.UTF-8",
-            "TZ=UTC",
-            "ANDROID_ROOT=" + (System.getenv("ANDROID_ROOT") ?: "/system"),
-            "ANDROID_DATA=" + (System.getenv("ANDROID_DATA") ?: "/data"),
-        )
+        return st.shellEnv() + arrayOf("ENV=${rc.path}", "COLORTERM=truecolor")
     }
 
     private fun send(s: String) {

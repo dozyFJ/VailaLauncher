@@ -189,6 +189,26 @@ class Stack(private val ctx: Context) {
         return pb.start()
     }
 
+    /** Environment for interactive shells (terminal and AI agent). */
+    fun shellEnv(): Array<String> {
+        val home = File(base, "home").apply { mkdirs() }
+        return arrayOf(
+            "HOME=${home.path}",
+            "TMPDIR=${tmp.path}",
+            "PHPRC=${etc.path}",
+            "PREFIX=${usr.path}",
+            "WWW=${htdocs.path}",
+            "PATH=${bin.path}:/system/bin:/system/xbin",
+            "LD_LIBRARY_PATH=${lib.path}",
+            "TERMINFO=${File(share, "terminfo").path}",
+            "TERM=xterm-256color",
+            "LANG=en_US.UTF-8",
+            "TZ=UTC",
+            "ANDROID_ROOT=" + (System.getenv("ANDROID_ROOT") ?: "/system"),
+            "ANDROID_DATA=" + (System.getenv("ANDROID_DATA") ?: "/data"),
+        )
+    }
+
     /** Run a php CLI command, returns exit code and combined output. */
     fun runPhp(dir: File, vararg args: String): Pair<Int, String> {
         val pb = env(ProcessBuilder(listOf(File(bin, "php").path, "-c", phpIni.path) + args))

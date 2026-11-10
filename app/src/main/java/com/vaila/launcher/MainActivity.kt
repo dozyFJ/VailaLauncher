@@ -54,6 +54,9 @@ class MainActivity : Activity() {
         installBtn.setOnClickListener { open("/install/") }
         findViewById<Button>(R.id.auto_install).setOnClickListener { autoInstallDialog() }
         findViewById<Button>(R.id.logs).setOnClickListener { showLogs() }
+        findViewById<Button>(R.id.ai).setOnClickListener {
+            startActivity(Intent(this, ChatActivity::class.java))
+        }
         findViewById<Button>(R.id.terminal).setOnClickListener {
             startActivity(Intent(this, TerminalActivity::class.java))
         }

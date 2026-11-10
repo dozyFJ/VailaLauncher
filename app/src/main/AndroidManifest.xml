@@ -32,6 +32,11 @@
             android:label="Терминал"
             android:windowSoftInputMode="adjustResize" />
 
+        <activity
+            android:name=".ChatActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:windowSoftInputMode="adjustResize" />
+
         <service
             android:name=".ServerService"
             android:exported="false" />
