@@ -34,7 +34,11 @@ upload="$(find "$WORK/oc" -maxdepth 3 -type d -name upload | head -1)"
   sed -i 's/error_reporting(E_ALL)/error_reporting(E_ALL \& ~E_DEPRECATED \& ~E_USER_DEPRECATED)/g' "$f"
   echo "patched: ${f#$upload/}"
 done
-grep -rn -A3 'set_error_handler' --include='*.php' "$upload/system" | head -20 || true
+# OpenCart's own error handler ignores error_reporting(); make it respect it.
+{ grep -rl --include='*.php' 'set_error_handler(function' "$upload" --exclude-dir=vendor || true; } | while read -r f; do
+  perl -0pi -e 's/(set_error_handler\(function\s*\([^)]*\$code[^)]*\)[^{]*\{)/$1\n\tif (!(error_reporting() \& (int)\$code)) { return false; }/g' "$f"
+  grep -q 'error_reporting() & (int)$code' "$f" && echo "patched handler: ${f#$upload/}"
+done
 rm -f "$ASSETS/htdocs.zip"
 (cd "$upload" && zip -qr -9 "$ASSETS/htdocs.zip" .)
 
