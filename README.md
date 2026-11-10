@@ -1,6 +1,6 @@
 # VailaLauncher
 
-Карманный «XAMPP» для Android: PHP 8.3 + MariaDB + OpenCart 4 прямо на телефоне, без root и без Termux.
+Карманный «XAMPP» для Android: PHP 8.5 + MariaDB + OpenCart 4 прямо на телефоне, без root и без Termux.
 
 ## Как пользоваться
 
@@ -22,7 +22,7 @@
 
 ## Как это устроено
 
-- PHP: статическая сборка [static-php-cli](https://github.com/crazywhalecc/static-php-cli) под linux-aarch64, встроенный сервер `php -S` с 4 воркерами.
+- PHP: пакет из Termux (bionic, видит DNS Android), встроенный сервер `php -S` с 4 воркерами.
 - MariaDB: пакет из репозитория Termux, только `mariadbd` и нужные ему `.so`.
 - Всё скачивается в CI (`scripts/fetch_runtime.sh`) и упаковывается в assets APK.
 - `targetSdk 28`: иначе Android 10+ запрещает приложению запускать бинарники из своей папки (так же делает Termux). Из-за этого APK не подходит для Google Play, только для ручной установки.

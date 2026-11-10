@@ -77,7 +77,9 @@ def main():
     os.makedirs(work, exist_ok=True)
     pkgs, provides = parse(load_index())
 
-    want, queue = [], ["mariadb"]
+    print("php packages:", " ".join(sorted(n for n in pkgs if n.startswith("php"))))
+    roots_pkgs = ["mariadb", "php"] + [n for n in ("php-gd",) if n in pkgs]
+    want, queue = [], list(roots_pkgs)
     while queue:
         name = queue.pop(0)
         name = name if name in pkgs else provides.get(name, name)
@@ -118,6 +120,26 @@ def main():
     os.makedirs(os.path.join(out_usr, "lib"), exist_ok=True)
     shutil.copy(server, os.path.join(out_usr, "bin", "mariadbd"))
     roots = [server]
+
+    # PHP (bionic build: uses Android DNS, unlike static musl builds)
+    php = os.path.realpath(os.path.join(usr, "bin", "php"))
+    shutil.copy(php, os.path.join(out_usr, "bin", "php"))
+    roots.append(php)
+    ext_src = os.path.join(usr, "lib", "php")
+    if os.path.isdir(ext_src):
+        os.makedirs(os.path.join(out_usr, "lib", "php"), exist_ok=True)
+        for fn in sorted(os.listdir(ext_src)):
+            if fn.endswith(".so"):
+                real = os.path.realpath(os.path.join(ext_src, fn))
+                shutil.copy(real, os.path.join(out_usr, "lib", "php", fn))
+                roots.append(real)
+        print("php extensions:", sorted(os.listdir(os.path.join(out_usr, "lib", "php"))))
+    cert = os.path.join(usr, "etc", "tls", "cert.pem")
+    if os.path.exists(cert):
+        os.makedirs(os.path.join(out_usr, "etc", "tls"), exist_ok=True)
+        shutil.copy(os.path.realpath(cert), os.path.join(out_usr, "etc", "tls", "cert.pem"))
+    else:
+        print("  WARN: no CA bundle found")
     for extra in ("mariadb", "mariadb-dump", "mariadb-admin"):
         p = os.path.join(usr, "bin", extra)
         if os.path.exists(p):
@@ -151,21 +173,6 @@ def main():
             src = os.path.join(ti, sub)
             if os.path.isdir(src):
                 shutil.copytree(src, os.path.join(out_usr, "share", "terminfo", sub), dirs_exist_ok=True)
-
-    # Probe: what Termux's own PHP ships (info for a possible switch).
-    try:
-        ph = pkgs.get("php")
-        if ph:
-            deb = os.path.join(work, "php-probe.deb")
-            with open(deb, "wb") as f:
-                f.write(fetch(f"{REPO}/{ph['Filename']}"))
-            r = subprocess.run(["dpkg-deb", "-c", deb], capture_output=True, text=True)
-            print("PROBE php", ph["Version"], "Depends:", ph.get("Depends", ""))
-            for line in r.stdout.splitlines():
-                if "/lib/php" in line or "/bin/" in line:
-                    print("PROBE", line.split()[-1])
-    except Exception as e:  # noqa: BLE001
-        print("probe failed:", e)
 
     # Error messages + charsets
     msg_dir = None
@@ -215,8 +222,8 @@ def main():
         f.write("\n".join(parts) + "\n")
 
     ver = pkgs["mariadb"]["Version"]
-    with open(os.path.join(out_usr, "share", "mariadb-version.txt"), "w") as f:
-        f.write(ver + "\n")
+    with open(os.path.join(out_usr, "share", "runtime-info.txt"), "w") as f:
+        f.write(f"mariadb={ver}\nphp={pkgs['php']['Version']}\n")
     print("MariaDB", ver, "staged into", out_usr)
 
 

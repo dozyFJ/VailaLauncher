@@ -71,7 +71,18 @@ class Stack(private val ctx: Context) {
     }
 
     private fun writePhpIni() {
+        val extDir = File(lib, "php")
+        val exts = extDir.listFiles()?.map { it.name }?.filter { it.endsWith(".so") }?.sorted().orEmpty()
+        val extLines = exts.joinToString("\n") {
+            if (it == "opcache.so" || it == "xdebug.so") "zend_extension = ${File(extDir, it).path}" else "extension = $it"
+        }
+        val ca = File(usr, "etc/tls/cert.pem").path
         phpIni.writeText(
+            """
+            extension_dir = ${extDir.path}
+            openssl.cafile = $ca
+            curl.cainfo = $ca
+            error_reporting = E_ALL & ~E_DEPRECATED""".trimIndent() + "\n" + extLines + "\n" +
             """
             memory_limit = 256M
             upload_max_filesize = 64M

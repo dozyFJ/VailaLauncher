@@ -20,7 +20,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginBottom="12dp"
-            android:text="PHP 8.3 + MariaDB + OpenCart 4 прямо на телефоне"
+            android:text="PHP 8.5 + MariaDB + OpenCart 4 прямо на телефоне"
             android:textColor="#888888" />
 
         <TextView
