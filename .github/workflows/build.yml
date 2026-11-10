@@ -1,0 +1,49 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-user-static zip unzip file binutils
+
+      - name: Download PHP, MariaDB, OpenCart
+        run: bash scripts/fetch_runtime.sh
+
+      - name: Build APK
+        run: ./gradlew --no-daemon assembleRelease
+
+      - name: Rename
+        run: cp app/build/outputs/apk/release/app-release.apk VailaLauncher.apk && ls -lh VailaLauncher.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VailaLauncher-apk
+          path: VailaLauncher.apk
+
+      - name: Publish "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest -y --cleanup-tag || true
+          gh release create latest VailaLauncher.apk \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "VailaLauncher (сборка #${{ github.run_number }})" \
+            --notes "Автосборка из ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}. Скачай VailaLauncher.apk ниже."

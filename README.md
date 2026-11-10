@@ -1,0 +1,32 @@
+# VailaLauncher
+
+Карманный «XAMPP» для Android: PHP 8.3 + MariaDB + OpenCart 4 прямо на телефоне, без root и без Termux.
+
+## Как пользоваться
+
+1. Скачай `VailaLauncher.apk` из релиза **latest** (раздел Releases) и установи.
+2. Нажми **Запустить**. Первый запуск дольше: распаковываются PHP, MariaDB и OpenCart и создаётся база.
+3. Нажми **Установщик OpenCart** и введи:
+   - Hostname: `127.0.0.1`
+   - Username: `root`
+   - Password: пусто
+   - Database: `opencart`
+   - Port: `3306`
+4. После установки нажми **Удалить папку install** и открывай магазин или админку.
+
+Галочка «Доступ из Wi-Fi сети» открывает сайт для других устройств в сети (адрес появится на экране).
+
+## Как это устроено
+
+- PHP: статическая сборка [static-php-cli](https://github.com/crazywhalecc/static-php-cli) под linux-aarch64, встроенный сервер `php -S` с 4 воркерами.
+- MariaDB: пакет из репозитория Termux, только `mariadbd` и нужные ему `.so`.
+- Всё скачивается в CI (`scripts/fetch_runtime.sh`) и упаковывается в assets APK.
+- `targetSdk 28`: иначе Android 10+ запрещает приложению запускать бинарники из своей папки (так же делает Termux). Из-за этого APK не подходит для Google Play, только для ручной установки.
+- Только arm64 (почти все современные телефоны).
+
+## Сборка
+
+Каждый push запускает GitHub Actions: сборка → артефакт → релиз `latest`.
+Локально: `bash scripts/fetch_runtime.sh && ./gradlew assembleRelease` (нужен Android SDK).
+
+Ключ подписи `app/vaila.keystore` лежит в репозитории, чтобы обновления ставились поверх. Для публичного распространения замени его на свой.
