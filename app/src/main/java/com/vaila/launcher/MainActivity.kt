@@ -52,6 +52,7 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.open_site).setOnClickListener { open("/") }
         findViewById<Button>(R.id.open_admin).setOnClickListener { open("/admin/") }
         installBtn.setOnClickListener { open("/install/") }
+        findViewById<Button>(R.id.auto_install).setOnClickListener { autoInstallDialog() }
         findViewById<Button>(R.id.logs).setOnClickListener { showLogs() }
         findViewById<Button>(R.id.terminal).setOnClickListener {
             startActivity(Intent(this, TerminalActivity::class.java))
@@ -114,6 +115,77 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this).setTitle("Логи").setView(sv)
             .setPositiveButton("OK", null).show()
         sv.post { sv.fullScroll(ScrollView.FOCUS_DOWN) }
+    }
+
+    private fun autoInstallDialog() {
+        if (!ServerService.dbRunning() || !ServerService.phpRunning()) {
+            Toast.makeText(this, "Сначала нажми «Запустить» и дождись, пока загорятся PHP и MariaDB", Toast.LENGTH_LONG).show()
+            return
+        }
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, 0)
+        }
+        fun field(hint: String, value: String, type: Int) = android.widget.EditText(this).apply {
+            this.hint = hint
+            setText(value)
+            inputType = type
+            box.addView(this)
+        }
+        val t = android.text.InputType.TYPE_CLASS_TEXT
+        val login = field("Логин админки", "admin", t)
+        val pass = field("Пароль админки (мин. 4 символа)", "", t or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD)
+        val mail = field("E-mail", "admin@example.com", t or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS)
+        AlertDialog.Builder(this)
+            .setTitle("Автоустановка OpenCart")
+            .setMessage("База, пользователь БД и настройки создадутся сами. Текущая база opencart будет очищена.")
+            .setView(box)
+            .setPositiveButton("Установить") { _, _ ->
+                val l = login.text.toString().trim()
+                val p = pass.text.toString()
+                val m = mail.text.toString().trim()
+                if (l.length < 3 || p.length < 4 || !m.contains("@")) {
+                    Toast.makeText(this, "Логин от 3 символов, пароль от 4, нормальный e-mail", Toast.LENGTH_LONG).show()
+                } else {
+                    runAutoInstall(l, p, m)
+                }
+            }
+            .setNegativeButton("Отмена", null)
+            .show()
+    }
+
+    private fun runAutoInstall(login: String, pass: String, mail: String) {
+        val progress = android.app.ProgressDialog(this).apply {
+            setMessage("Подготовка…")
+            setCancelable(false)
+            show()
+        }
+        Thread {
+            val result = try {
+                val out = Stack(this).autoInstall(login, pass, mail) { msg -> runOnUiThread { progress.setMessage(msg) } }
+                Result.success(out)
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+            runOnUiThread {
+                progress.dismiss()
+                result.onSuccess {
+                    AlertDialog.Builder(this)
+                        .setTitle("OpenCart установлен ✅")
+                        .setMessage("Админка: http://127.0.0.1:${Stack.HTTP_PORT}/admin/\nЛогин: $login\nПароль: $pass\n\nПапка install удалена.")
+                        .setPositiveButton("Открыть админку") { _, _ -> open("/admin/") }
+                        .setNegativeButton("Магазин") { _, _ -> open("/") }
+                        .show()
+                }.onFailure {
+                    AlertDialog.Builder(this)
+                        .setTitle("Не получилось")
+                        .setMessage(it.message ?: it.toString())
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
+            }
+        }.start()
     }
 
     private fun removeInstall() {

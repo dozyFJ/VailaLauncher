@@ -77,10 +77,16 @@
             android:text="Доступ из Wi-Fi сети (с других устройств)" />
 
         <Button
+            android:id="@+id/auto_install"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="⚡ Автоустановка OpenCart" />
+
+        <Button
             android:id="@+id/open_install"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Установщик OpenCart" />
+            android:text="Установщик OpenCart (вручную)" />
 
         <Button
             android:id="@+id/open_site"
@@ -100,7 +106,7 @@
             android:layout_marginTop="12dp"
             android:background="#14000000"
             android:padding="12dp"
-            android:text="Данные для установщика OpenCart:\nDB Driver: MySQLi (или PDO)\nHostname: 127.0.0.1\nUsername: root\nPassword: (пусто)\nDatabase: opencart\nPort: 3306\nPrefix: oc_"
+            android:text="Для ручной установки:\nDB Driver: MySQLi\nHostname: 127.0.0.1 (не localhost!)\nUsername: root\nPassword: (пусто)\nDatabase: opencart\nPort: 3306\nPrefix: oc_"
             android:textIsSelectable="true" />
 
         <Button

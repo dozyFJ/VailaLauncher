@@ -189,6 +189,70 @@ class Stack(private val ctx: Context) {
         return pb.start()
     }
 
+    /** Run a php CLI command, returns exit code and combined output. */
+    fun runPhp(dir: File, vararg args: String): Pair<Int, String> {
+        val pb = env(ProcessBuilder(listOf(File(bin, "php").path, "-c", phpIni.path) + args))
+            .directory(dir)
+            .redirectErrorStream(true)
+        val p = pb.start()
+        val out = p.inputStream.bufferedReader().readText()
+        return p.waitFor() to out
+    }
+
+    /**
+     * Installs OpenCart with its own CLI installer: creates a DB user,
+     * runs install/cli_install.php and removes the install folder.
+     */
+    fun autoInstall(admin: String, password: String, email: String, progress: (String) -> Unit): String {
+        val installDir = File(htdocs, "install")
+        if (!File(installDir, "cli_install.php").exists()) throw IOException("Папки install нет: OpenCart уже установлен. Для переустановки нажми «Сбросить всё».")
+        val log = StringBuilder()
+
+        progress("Создаю базу и пользователя…")
+        val sql = File(tmp, "mkdb.php")
+        sql.writeText(
+            """
+            <?php
+            mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+            ${'$'}m = new mysqli('127.0.0.1', 'root', '', '', $MYSQL_PORT);
+            ${'$'}m->query("DROP DATABASE IF EXISTS `$DB_NAME`");
+            ${'$'}m->query("CREATE DATABASE `$DB_NAME` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci");
+            ${'$'}m->query("CREATE USER IF NOT EXISTS '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$DB_PASS'");
+            ${'$'}m->query("GRANT ALL PRIVILEGES ON `$DB_NAME`.* TO '$DB_USER'@'127.0.0.1'");
+            ${'$'}m->query("FLUSH PRIVILEGES");
+            echo "db ok\n";
+            """.trimIndent() + "\n"
+        )
+        val (c1, o1) = runPhp(tmp, sql.path)
+        sql.delete()
+        log.append(o1)
+        if (c1 != 0 || !o1.contains("db ok")) throw IOException("Не удалось создать базу:\n$o1")
+
+        progress("Устанавливаю OpenCart (до минуты)…")
+        val (c2, o2) = runPhp(
+            installDir, "cli_install.php", "install",
+            "--username", admin,
+            "--password", password,
+            "--email", email,
+            "--http_server", "http://127.0.0.1:$HTTP_PORT/",
+            "--db_driver", "mysqli",
+            "--db_hostname", "127.0.0.1",
+            "--db_username", DB_USER,
+            "--db_password", DB_PASS,
+            "--db_database", DB_NAME,
+            "--db_port", MYSQL_PORT.toString(),
+            "--db_prefix", "oc_",
+        )
+        log.append(o2)
+        File(logs, "install.log").writeText(log.toString())
+        val cfg = File(htdocs, "config.php")
+        val ok = cfg.exists() && cfg.readText().contains("'$DB_NAME'")
+        if (c2 != 0 || !ok) throw IOException("Установщик OpenCart вернул ошибку (код $c2):\n" + o2.takeLast(1500))
+
+        installDir.deleteRecursively()
+        return o2.trim().takeLast(300)
+    }
+
     /** Kill leftovers of our binaries (e.g. after the app was killed). */
     fun killStale() {
         val prefix = bin.path
@@ -208,7 +272,7 @@ class Stack(private val ctx: Context) {
     }
 
     fun logsText(): String = buildString {
-        for (n in listOf("php_server.log", "php_errors.log", "mysql.log", "mysql_bootstrap.log", "service.log")) {
+        for (n in listOf("php_server.log", "php_errors.log", "mysql.log", "mysql_bootstrap.log", "install.log", "service.log")) {
             val f = File(logs, n)
             if (f.exists()) append("===== $n =====\n").append(tail(f, 6000)).append("\n\n")
         }
@@ -224,6 +288,9 @@ class Stack(private val ctx: Context) {
     companion object {
         const val HTTP_PORT = 8080
         const val MYSQL_PORT = 3306
+        const val DB_NAME = "opencart"
+        const val DB_USER = "opencart"
+        const val DB_PASS = "opencart"
 
         fun portOpen(port: Int): Boolean = try {
             Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 300); true }
