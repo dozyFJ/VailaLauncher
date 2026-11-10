@@ -117,13 +117,20 @@ def main():
     os.makedirs(os.path.join(out_usr, "bin"), exist_ok=True)
     os.makedirs(os.path.join(out_usr, "lib"), exist_ok=True)
     shutil.copy(server, os.path.join(out_usr, "bin", "mariadbd"))
+    roots = [server]
+    for extra in ("mariadb", "mariadb-dump", "mariadb-admin"):
+        p = os.path.join(usr, "bin", extra)
+        if os.path.exists(p):
+            real = os.path.realpath(p)
+            shutil.copy(real, os.path.join(out_usr, "bin", extra))
+            roots.append(real)
 
     # Shared library closure, resolved by NEEDED names.
     def needed(path):
         r = subprocess.run(["readelf", "-d", path], capture_output=True, text=True, check=True)
         return re.findall(r"\(NEEDED\)\s+Shared library: \[(.+?)\]", r.stdout)
 
-    seen, todo = set(), [server]
+    seen, todo = set(), list(roots)
     while todo:
         for n in needed(todo.pop()):
             if n in seen:
@@ -137,6 +144,28 @@ def main():
             elif n not in SYSTEM_LIBS:
                 print("  NOTE: assuming system library:", n)
     print("bundled libs:", sorted(os.listdir(os.path.join(out_usr, "lib"))))
+
+    ti = os.path.join(usr, "share", "terminfo")
+    if os.path.isdir(ti):
+        for sub in ("x", "v", "d", "l"):
+            src = os.path.join(ti, sub)
+            if os.path.isdir(src):
+                shutil.copytree(src, os.path.join(out_usr, "share", "terminfo", sub), dirs_exist_ok=True)
+
+    # Probe: what Termux's own PHP ships (info for a possible switch).
+    try:
+        ph = pkgs.get("php")
+        if ph:
+            deb = os.path.join(work, "php-probe.deb")
+            with open(deb, "wb") as f:
+                f.write(fetch(f"{REPO}/{ph['Filename']}"))
+            r = subprocess.run(["dpkg-deb", "-c", deb], capture_output=True, text=True)
+            print("PROBE php", ph["Version"], "Depends:", ph.get("Depends", ""))
+            for line in r.stdout.splitlines():
+                if "/lib/php" in line or "/bin/" in line:
+                    print("PROBE", line.split()[-1])
+    except Exception as e:  # noqa: BLE001
+        print("probe failed:", e)
 
     # Error messages + charsets
     msg_dir = None

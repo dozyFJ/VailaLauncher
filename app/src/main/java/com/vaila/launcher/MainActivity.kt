@@ -53,6 +53,10 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.open_admin).setOnClickListener { open("/admin/") }
         installBtn.setOnClickListener { open("/install/") }
         findViewById<Button>(R.id.logs).setOnClickListener { showLogs() }
+        findViewById<Button>(R.id.terminal).setOnClickListener {
+            startActivity(Intent(this, TerminalActivity::class.java))
+        }
+        findViewById<Button>(R.id.battery).setOnClickListener { askBattery() }
         findViewById<Button>(R.id.remove_install).setOnClickListener { removeInstall() }
         findViewById<Button>(R.id.reset).setOnClickListener { confirmReset() }
 
@@ -140,6 +144,21 @@ class MainActivity : Activity() {
                 }
             }
             .setNegativeButton("Отмена", null).show()
+    }
+
+    @android.annotation.SuppressLint("BatteryLife")
+    private fun askBattery() {
+        val pm = getSystemService(android.os.PowerManager::class.java)
+        if (pm.isIgnoringBatteryOptimizations(packageName)) {
+            Toast.makeText(this, "Уже разрешено. На Realme ещё включи «Автозапуск» и «Работа в фоне» в настройках приложения.", Toast.LENGTH_LONG).show()
+            startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+            return
+        }
+        try {
+            startActivity(Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+        } catch (_: Exception) {
+            startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        }
     }
 
     private fun wifiIp(): String? = try {

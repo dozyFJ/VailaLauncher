@@ -55,3 +55,8 @@ android {
         checkReleaseBuilds = false
     }
 }
+
+dependencies {
+    // Terminal engine from Termux (Apache 2.0)
+    implementation("com.github.termux.termux-app:terminal-view:v0.118.0")
+}
