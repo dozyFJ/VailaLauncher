@@ -156,9 +156,12 @@ def main():
 
     # bootstrap.sql, same as mariadb-install-db --auth-root-authentication-method=normal
     def find_sql(name):
-        for root, _d, files in os.walk(usr):
-            if name in files:
-                return os.path.join(root, name)
+        # MariaDB 12+ renamed mysql_*.sql to mariadb_*.sql
+        names = [name, name.replace("mysql_", "mariadb_", 1)]
+        for n in names:
+            for root, _d, files in os.walk(usr):
+                if n in files:
+                    return os.path.join(root, n)
         return None
 
     parts = ["create database if not exists mysql;", "use mysql;", "SET @auth_root_socket=NULL;"]
