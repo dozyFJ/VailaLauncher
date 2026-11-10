@@ -20,9 +20,6 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Tools
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-user-static zip unzip file binutils
-
       - name: Download PHP, MariaDB, OpenCart
         run: bash scripts/fetch_runtime.sh
 
