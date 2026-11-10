@@ -89,6 +89,7 @@ class TerminalActivity : Activity() {
             "HOME=${home.path}",
             "ENV=${rc.path}",
             "TMPDIR=${st.tmp.path}",
+            "PHPRC=${st.etc.path}",
             "PREFIX=${st.usr.path}",
             "WWW=${st.htdocs.path}",
             "PATH=${st.bin.path}:/system/bin:/system/xbin",

@@ -101,6 +101,7 @@ class Stack(private val ctx: Context) {
             allow_url_fopen = On
             opcache.enable = 1
             opcache.enable_cli = 1
+            opcache.lockfile_path = ${tmp.path}
             """.trimIndent() + "\n"
         )
     }
@@ -111,6 +112,8 @@ class Stack(private val ctx: Context) {
         e["HOME"] = base.path
         e["TMPDIR"] = tmp.path
         e["TZ"] = "UTC"
+        e["PHPRC"] = etc.path
+        e["PREFIX"] = usr.path
         return pb
     }
 
