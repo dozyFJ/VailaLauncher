@@ -33,6 +33,7 @@ class ChatActivity : Activity() {
     companion object {
         // Survives activity recreation (rotation) while the process lives.
         val history = mutableListOf<MessageParam>()
+        val geminiHistory = org.json.JSONArray()
         val transcript = mutableListOf<Pair<Int, String>>() // kind, text
         @Volatile var running = false
         @Volatile var cancel = false
@@ -56,7 +57,7 @@ class ChatActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = "ИИ-мастер"
+        title = "ИИ-мастер · " + if (isGemini()) "Gemini" else "Claude"
         WebView.enableSlowWholeDocumentDraw()
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         list = LinearLayout(this).apply {
@@ -103,7 +104,7 @@ class ChatActivity : Activity() {
             transcript += K_STATUS to ("Пиши, что поменять на сайте: дизайн, цвета, тексты, товары, настройки. " +
                 "Я сам правлю файлы и базу прямо на телефоне. Перед большими правками делаю .bak-копии.")
         }
-        if (prefs.getString("key", "").isNullOrBlank()) settings()
+        if (currentKey().isBlank()) settings()
     }
 
     override fun onResume() {
@@ -129,7 +130,7 @@ class ChatActivity : Activity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
             1 -> if (!running) {
-                history.clear(); transcript.clear(); list.removeAllViews()
+                history.clear(); clearGemini(); transcript.clear(); list.removeAllViews()
                 add(K_STATUS, "Новый чат.")
             }
             2 -> settings()
@@ -155,7 +156,7 @@ class ChatActivity : Activity() {
         if (photos.isNotEmpty()) {
             text += "\n\n[Фото сохранены на сайте: " + photos.joinToString(", ") { it.first } + "]"
         }
-        val key = prefs.getString("key", "").orEmpty()
+        val key = currentKey()
         if (key.isBlank()) { settings(); return }
         if (!ServerService.phpRunning() || !ServerService.dbRunning()) {
             add(K_STATUS, "Подсказка: сервер не запущен. Правки файлов сработают, но для проверки сайта и SQL нажми «Запустить» на главном экране.")
@@ -165,18 +166,28 @@ class ChatActivity : Activity() {
         running = true
         cancel = false
         updateSend()
-        val model = prefs.getString("model", Agent.DEFAULT_MODEL) ?: Agent.DEFAULT_MODEL
+        val gemini = isGemini()
+        val model = if (gemini) prefs.getString("gmodel", GeminiAgent.DEFAULT_MODEL) ?: GeminiAgent.DEFAULT_MODEL
+        else prefs.getString("model", Agent.DEFAULT_MODEL) ?: Agent.DEFAULT_MODEL
+        val images = photos.map { it.second }
         Thread {
             try {
                 val shot = SiteShot(this)
-                Agent(Stack(applicationContext), key, model) { path -> shot.capture(path) }
-                    .run(history, text, photos.map { it.second }, { ev ->
+                val emit: (Agent.Event) -> Unit = { ev ->
                     when (ev) {
                         is Agent.Event.Text -> post(K_AI, ev.text)
                         is Agent.Event.Tool -> post(if (ev.error) K_TOOL_ERR else K_TOOL, ev.title + "\n" + ev.output.take(1500))
                         is Agent.Event.Status -> post(K_STATUS, ev.text)
                     }
-                }, { cancel })
+                }
+                val st = Stack(applicationContext)
+                if (gemini) {
+                    GeminiAgent(st, key, model) { path -> shot.capture(path) }
+                        .run(geminiHistory, text, images, emit) { cancel }
+                } else {
+                    Agent(st, key, model) { path -> shot.capture(path) }
+                        .run(history, text, images, emit) { cancel }
+                }
             } catch (e: Exception) {
                 post(K_STATUS, "Ошибка: ${e.message}")
             } finally {
@@ -331,21 +342,73 @@ class ChatActivity : Activity() {
         return "image/catalog/uploads/$name" to jpg
     }
 
+    private fun isGemini() = prefs.getString("provider", "gemini") == "gemini"
+    private fun currentKey() = prefs.getString(if (isGemini()) "gkey" else "key", "").orEmpty()
+    private fun clearGemini() { while (geminiHistory.length() > 0) geminiHistory.remove(geminiHistory.length() - 1) }
+
     private fun settings() {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(px(20), px(8), px(20), 0)
         }
-        val key = EditText(this).apply {
-            hint = "sk-ant-…"
-            setText(prefs.getString("key", ""))
+        fun label(t: String, bold: Boolean = false) = TextView(this).apply {
+            text = t
+            if (bold) { setTypeface(typeface, Typeface.BOLD); setPadding(0, px(12), 0, 0) }
+            box.addView(this)
+        }
+        fun keyField(pref: String, hint: String) = EditText(this).apply {
+            this.hint = hint
+            setText(prefs.getString(pref, ""))
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             isSingleLine = true
+            box.addView(this)
         }
-        box.addView(TextView(this).apply { text = "API-ключ Anthropic (console.anthropic.com → API Keys). Хранится только на этом телефоне." })
-        box.addView(key)
+
+        label("Какой ИИ использовать", true)
+        val prov = RadioGroup(this)
+        val rbG = RadioButton(this).apply { text = "Google Gemini — бесплатно (с лимитами)"; id = 201 }
+        val rbC = RadioButton(this).apply { text = "Claude — платно, умнее"; id = 202 }
+        prov.addView(rbG); prov.addView(rbC)
+        prov.check(if (isGemini()) 201 else 202)
+        box.addView(prov)
+
+        label("Google Gemini", true)
+        label("Ключ: aistudio.google.com → Get API key (бесплатно)")
+        val gkey = keyField("gkey", "AIza…")
+        val gmodel = EditText(this).apply {
+            hint = GeminiAgent.DEFAULT_MODEL
+            setText(prefs.getString("gmodel", GeminiAgent.DEFAULT_MODEL))
+            isSingleLine = true
+        }
+        val gRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        gRow.addView(gmodel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        gRow.addView(Button(this).apply {
+            text = "Список"
+            isAllCaps = false
+            setOnClickListener {
+                val k = gkey.text.toString().trim()
+                if (k.isEmpty()) { android.widget.Toast.makeText(this@ChatActivity, "Сначала вставь ключ", android.widget.Toast.LENGTH_SHORT).show(); return@setOnClickListener }
+                Thread {
+                    val r = runCatching { GeminiAgent.listModels(k) }
+                    runOnUiThread {
+                        r.onSuccess { ids ->
+                            AlertDialog.Builder(this@ChatActivity).setTitle("Модели Gemini")
+                                .setItems(ids.toTypedArray()) { _, i -> gmodel.setText(ids[i]) }.show()
+                        }.onFailure {
+                            android.widget.Toast.makeText(this@ChatActivity, "Не получилось: ${it.message}", android.widget.Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }.start()
+            }
+        })
+        label("Модель (бесплатны обычно модели Flash и Flash-Lite):")
+        box.addView(gRow)
+
+        label("Claude", true)
+        label("Ключ: console.anthropic.com → API Keys (нужен баланс)")
+        val ckey = keyField("key", "sk-ant-…")
         val models = listOf(
-            "claude-opus-5-5" to "Opus 5.5 — умнее (рекомендуется)",
+            "claude-opus-5-5" to "Opus 5.5 — умнее",
             "claude-sonnet-5-5" to "Sonnet 5.5 — дешевле и быстрее",
         )
         val group = RadioGroup(this)
@@ -354,15 +417,22 @@ class ChatActivity : Activity() {
             group.addView(RadioButton(this).apply { text = label; this.id = 100 + i; isChecked = id == current })
         }
         box.addView(group)
+        label("Ключи хранятся только на этом телефоне.")
+
         AlertDialog.Builder(this)
             .setTitle("Ключ и модель")
-            .setView(box)
+            .setView(ScrollView(this).apply { addView(box) })
             .setPositiveButton("Сохранить") { _, _ ->
                 val idx = (group.checkedRadioButtonId - 100).coerceIn(0, models.lastIndex)
+                val newProv = if (prov.checkedRadioButtonId == 202) "claude" else "gemini"
                 prefs.edit()
-                    .putString("key", key.text.toString().trim())
+                    .putString("provider", newProv)
+                    .putString("gkey", gkey.text.toString().trim())
+                    .putString("gmodel", gmodel.text.toString().trim().ifEmpty { GeminiAgent.DEFAULT_MODEL })
+                    .putString("key", ckey.text.toString().trim())
                     .putString("model", models[idx].first)
                     .apply()
+                title = "ИИ-мастер · " + if (newProv == "gemini") "Gemini" else "Claude"
             }
             .setNegativeButton("Отмена", null)
             .show()
