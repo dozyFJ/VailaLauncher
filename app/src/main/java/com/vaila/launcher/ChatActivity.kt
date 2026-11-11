@@ -153,7 +153,6 @@ class ChatActivity : Activity() {
         when (item.itemId) {
             1 -> if (!running) {
                 chats += ChatState("Чат ${chats.size + 1}"); cur = chats.lastIndex; rerender()
-                add(K_STATUS, "Новый чат.")
             }
             2 -> settings()
             3 -> memoryDialog()
