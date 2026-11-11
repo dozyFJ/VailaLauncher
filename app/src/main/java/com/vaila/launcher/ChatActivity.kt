@@ -187,8 +187,9 @@ class ChatActivity : Activity() {
                 }
                 val st = Stack(applicationContext)
                 if (prov == "gemini") {
-                    GeminiAgent(st, key, model) { path -> shot.capture(path) }
-                        .run(geminiHistory, text, images, emit) { cancel }
+                    GeminiAgent(st, key, model, { path -> shot.capture(path) }) { m ->
+                        prefs.edit().putString("gmodel", m).apply()
+                    }.run(geminiHistory, text, images, emit) { cancel }
                 } else if (prov == "glm") {
                     val vision = Regex("\\d+(\\.\\d+)?v").containsMatchIn(model) || "vision" in model
                     OpenAiAgent(st, OpenAiAgent.ZAI_BASE, key, model, vision, glmFast) { path -> shot.capture(path) }

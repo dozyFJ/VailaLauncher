@@ -15,9 +15,12 @@ import java.net.URL
 class GeminiAgent(
     st: Stack,
     private val apiKey: String,
-    private val model: String,
+    private var model: String,
     private val screenshot: ((String) -> ByteArray?)? = null,
+    /** Called when the model was retired and replaced automatically. */
+    private val onModelChanged: ((String) -> Unit)? = null,
 ) {
+    private var switched = false
     private val box = ToolBox(st)
     private val system = ToolBox.systemPrompt(st)
 
@@ -120,6 +123,16 @@ class GeminiAgent(
             try {
                 return call(history)
             } catch (e: ApiException) {
+                if (!switched && isRetired(e)) {
+                    switched = true
+                    val repl = runCatching { pickModel(listModels(apiKey), model) }.getOrNull()
+                    if (repl != null && repl != model) {
+                        emit(Agent.Event.Status("Модель $model больше недоступна — переключаюсь на $repl"))
+                        model = repl
+                        onModelChanged?.invoke(repl)
+                        continue
+                    }
+                }
                 attempt++
                 if ((e.code == 429 || e.code == 503 || e.code == 500) && attempt <= 3) {
                     val wait = e.retryAfterS.coerceIn(5, 60)
@@ -160,6 +173,11 @@ class GeminiAgent(
         return JSONObject(text)
     }
 
+    private fun isRetired(e: ApiException): Boolean {
+        val m = e.message.orEmpty().lowercase()
+        return e.code == 404 || "no longer available" in m || ("model" in m && "not found" in m)
+    }
+
     private fun friendly(e: ApiException) = when (e.code) {
         429 -> "Бесплатный лимит Gemini исчерпан (${e.message?.take(200)}). Подожди минуту, а если это дневной лимит — до завтра, или выбери другую модель в настройках."
         400 -> "Gemini отклонил запрос (400): ${e.message}"
@@ -198,6 +216,19 @@ class GeminiAgent(
                 listOf("path", "old_str", "new_str")))
             .put(fn("view_site", "Сделать скриншот страницы локального сайта в ширину телефона, чтобы посмотреть дизайн.",
                 JSONObject().put("path", prop("STRING", "Путь страницы, например /")), listOf("path")))
+
+        /**
+         * Picks a replacement for a retired model: the "latest" alias if offered,
+         * otherwise the newest Flash (Flash-Lite if the old one was Lite), skipping previews.
+         */
+        fun pickModel(ids: List<String>, old: String): String? {
+            if (ids.isEmpty()) return null
+            val lite = "lite" in old
+            ids.firstOrNull { it == (if (lite) "gemini-flash-lite-latest" else "gemini-flash-latest") }?.let { return it }
+            val stable = ids.filter { "flash" in it && ("lite" in it) == lite && listOf("preview", "exp").none { x -> x in it } }
+            val ver = { id: String -> Regex("gemini-(\\d+(?:\\.\\d+)?)").find(id)?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0 }
+            return (stable.ifEmpty { ids.filter { "flash" in it } }.ifEmpty { ids }).maxByOrNull { ver(it) }
+        }
 
         /** Model ids from the account that support generateContent. */
         fun listModels(apiKey: String): List<String> {
