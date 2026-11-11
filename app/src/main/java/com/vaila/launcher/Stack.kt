@@ -273,6 +273,43 @@ class Stack(private val ctx: Context) {
         return o2.trim().takeLast(300)
     }
 
+    fun clearCache(): Int {
+        var n = 0
+        File(htdocs, "system/storage/cache").listFiles()?.forEach {
+            if (it.name != "index.html" && it.deleteRecursively()) n++
+        }
+        return n
+    }
+
+    /** Dump the database and zip it together with the site files. Returns the zip in tmp. */
+    fun backup(progress: (String) -> Unit): File {
+        progress("Выгружаю базу…")
+        val dump = File(tmp, "opencart.sql")
+        val p = env(ProcessBuilder(File(bin, "mariadb-dump").path, "-h", "127.0.0.1", "-P", MYSQL_PORT.toString(),
+            "-u", "root", "--single-transaction", "--routines", DB_NAME))
+            .redirectOutput(dump)
+            .redirectError(File(logs, "backup.log"))
+            .start()
+        if (p.waitFor() != 0) throw IOException("mariadb-dump не сработал:\n" + tail(File(logs, "backup.log"), 800))
+
+        progress("Упаковываю файлы сайта…")
+        val stamp = java.text.SimpleDateFormat("yyyy-MM-dd_HH-mm", java.util.Locale.US).format(java.util.Date())
+        val zip = File(tmp, "vaila-backup-$stamp.zip")
+        java.util.zip.ZipOutputStream(zip.outputStream().buffered()).use { z ->
+            z.putNextEntry(java.util.zip.ZipEntry("database/opencart.sql"))
+            dump.inputStream().use { it.copyTo(z) }
+            z.closeEntry()
+            val cache = File(htdocs, "system/storage/cache").canonicalPath
+            htdocs.walkTopDown().filter { it.isFile && !it.canonicalPath.startsWith(cache) }.forEach { f ->
+                z.putNextEntry(java.util.zip.ZipEntry("site/" + f.relativeTo(htdocs).path))
+                f.inputStream().use { it.copyTo(z) }
+                z.closeEntry()
+            }
+        }
+        dump.delete()
+        return zip
+    }
+
     /** Kill leftovers of our binaries (e.g. after the app was killed). */
     fun killStale() {
         val prefix = bin.path

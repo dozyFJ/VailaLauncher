@@ -61,6 +61,11 @@ class MainActivity : Activity() {
             startActivity(Intent(this, TerminalActivity::class.java))
         }
         findViewById<Button>(R.id.battery).setOnClickListener { askBattery() }
+        findViewById<Button>(R.id.backup).setOnClickListener { backup() }
+        findViewById<Button>(R.id.clear_cache).setOnClickListener {
+            val n = Stack(this).clearCache()
+            Toast.makeText(this, "Кеш очищен ($n)", Toast.LENGTH_SHORT).show()
+        }
         findViewById<Button>(R.id.remove_install).setOnClickListener { removeInstall() }
         findViewById<Button>(R.id.reset).setOnClickListener { confirmReset() }
 
@@ -219,6 +224,51 @@ class MainActivity : Activity() {
                 }
             }
             .setNegativeButton("Отмена", null).show()
+    }
+
+    private fun backup() {
+        if (!ServerService.dbRunning()) {
+            Toast.makeText(this, "Сначала нажми «Запустить»: нужна запущенная база", Toast.LENGTH_LONG).show()
+            return
+        }
+        @Suppress("DEPRECATION")
+        val progress = android.app.ProgressDialog(this).apply {
+            setMessage("Бэкап…"); setCancelable(false); show()
+        }
+        Thread {
+            val res = runCatching {
+                val zip = Stack(this).backup { m -> runOnUiThread { progress.setMessage(m) } }
+                val where = saveToDownloads(zip)
+                zip.delete()
+                where
+            }
+            runOnUiThread {
+                progress.dismiss()
+                AlertDialog.Builder(this)
+                    .setTitle(if (res.isSuccess) "Бэкап готов ✅" else "Бэкап не удался")
+                    .setMessage(res.getOrElse { it.message ?: it.toString() })
+                    .setPositiveButton("OK", null).show()
+            }
+        }.start()
+    }
+
+    /** Copies a file to the public Downloads folder (MediaStore on Android 10+). */
+    private fun saveToDownloads(f: File): String {
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, f.name)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/zip")
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Download/VailaLauncher")
+            }
+            val uri = contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw java.io.IOException("Не удалось создать файл в Загрузках")
+            contentResolver.openOutputStream(uri)!!.use { out -> f.inputStream().use { it.copyTo(out) } }
+            return "Сохранено: Загрузки/VailaLauncher/${f.name}\n(${f.length() / 1024 / 1024} МБ)"
+        }
+        val dir = getExternalFilesDir(null) ?: throw java.io.IOException("Нет внешнего хранилища")
+        val dest = File(dir, f.name)
+        f.copyTo(dest, overwrite = true)
+        return "Сохранено: ${dest.path}"
     }
 
     @android.annotation.SuppressLint("BatteryLife")

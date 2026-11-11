@@ -2,6 +2,15 @@ package com.vaila.launcher
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.net.Uri
+import android.webkit.WebView
+import android.widget.HorizontalScrollView
+import java.io.ByteArrayOutputStream
+import java.io.File
 import android.graphics.Typeface
 import android.os.Bundle
 import android.text.InputType
@@ -40,12 +49,15 @@ class ChatActivity : Activity() {
     private lateinit var scroll: ScrollView
     private lateinit var input: EditText
     private lateinit var send: Button
+    private lateinit var attachInfo: TextView
+    private val pending = mutableListOf<Pair<String, ByteArray>>() // saved path, jpeg
     private val prefs by lazy { getSharedPreferences("ai", MODE_PRIVATE) }
     private val dp by lazy { resources.displayMetrics.density }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         title = "ИИ-мастер"
+        WebView.enableSlowWholeDocumentDraw()
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         list = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -53,6 +65,15 @@ class ChatActivity : Activity() {
         }
         scroll = ScrollView(this).apply { addView(list) }
         root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        root.addView(quickRow())
+        attachInfo = TextView(this).apply {
+            setPadding(px(12), px(2), px(12), 0)
+            setTextColor(0xFF1E88E5.toInt())
+            visibility = android.view.View.GONE
+            setOnClickListener { pending.clear(); updateAttach() }
+        }
+        root.addView(attachInfo)
 
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -65,6 +86,14 @@ class ChatActivity : Activity() {
             maxLines = 5
         }
         send = Button(this).apply { setOnClickListener { onSend() } }
+        val attach = Button(this, null, android.R.attr.borderlessButtonStyle).apply {
+            text = "📎"
+            textSize = 20f
+            minWidth = 0
+            minimumWidth = 0
+            setOnClickListener { pickPhotos() }
+        }
+        bar.addView(attach)
         bar.addView(input, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         bar.addView(send)
         root.addView(bar)
@@ -118,8 +147,14 @@ class ChatActivity : Activity() {
             add(K_STATUS, "Останавливаю после текущего шага…")
             return
         }
-        val text = input.text.toString().trim()
-        if (text.isEmpty()) return
+        var text = input.text.toString().trim()
+        if (text.isEmpty() && pending.isEmpty()) return
+        if (text.isEmpty()) text = "Посмотри фото."
+        val photos = pending.toList()
+        pending.clear(); updateAttach()
+        if (photos.isNotEmpty()) {
+            text += "\n\n[Фото сохранены на сайте: " + photos.joinToString(", ") { it.first } + "]"
+        }
         val key = prefs.getString("key", "").orEmpty()
         if (key.isBlank()) { settings(); return }
         if (!ServerService.phpRunning() || !ServerService.dbRunning()) {
@@ -133,7 +168,9 @@ class ChatActivity : Activity() {
         val model = prefs.getString("model", Agent.DEFAULT_MODEL) ?: Agent.DEFAULT_MODEL
         Thread {
             try {
-                Agent(Stack(applicationContext), key, model).run(history, text, { ev ->
+                val shot = SiteShot(this)
+                Agent(Stack(applicationContext), key, model) { path -> shot.capture(path) }
+                    .run(history, text, photos.map { it.second }, { ev ->
                     when (ev) {
                         is Agent.Event.Text -> post(K_AI, ev.text)
                         is Agent.Event.Tool -> post(if (ev.error) K_TOOL_ERR else K_TOOL, ev.title + "\n" + ev.output.take(1500))
@@ -195,6 +232,103 @@ class ChatActivity : Activity() {
         }
         list.addView(tv, lp)
         scroll.post { scroll.fullScroll(ScrollView.FOCUS_DOWN) }
+    }
+
+    private fun quickRow(): HorizontalScrollView {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(px(4), 0, px(4), 0)
+        }
+        val quick = listOf(
+            "🎨 Новый дизайн" to "Посмотри главную страницу и сделай витрину современнее: цвета, шрифты, кнопки, шапка. Покажи результат.",
+            "🖼 Логотип из фото" to "Поставь присланное фото логотипом магазина.",
+            "📦 Добавить товар" to "Добавь товар: название — , цена — , описание — . Фото — присланное.",
+            "🏷 Название и контакты" to "Поменяй название магазина на « », телефон на , e-mail на , адрес на .",
+            "👁 Как выглядит сайт" to "Посмотри главную страницу и скажи, что бы ты улучшил.",
+            "↩️ Откатить" to "Откати последние изменения файлов из .bak-копий и очисти кеш.",
+            "🧹 Кеш" to "Очисти кеш OpenCart.",
+            "🇷🇺 Русский язык" to "Сделай витрину на русском: поставь русский язык по умолчанию (если пакета нет — переведи основные тексты витрины) и рубли валютой по умолчанию.",
+        )
+        for ((label, prompt) in quick) {
+            row.addView(Button(this, null, android.R.attr.buttonStyleSmall).apply {
+                text = label
+                isAllCaps = false
+                textSize = 12f
+                setOnClickListener {
+                    input.setText(prompt)
+                    input.setSelection(prompt.indexOf(" — ").let { if (it >= 0) it + 3 else prompt.length })
+                    input.requestFocus()
+                }
+            })
+        }
+        return HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(row)
+        }
+    }
+
+    private fun updateAttach() {
+        attachInfo.visibility = if (pending.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
+        attachInfo.text = "📎 Фото: ${pending.size} (нажми, чтобы убрать)"
+    }
+
+    private fun pickPhotos() {
+        val i = Intent(Intent.ACTION_GET_CONTENT).apply {
+            type = "image/*"
+            addCategory(Intent.CATEGORY_OPENABLE)
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(Intent.createChooser(i, "Выбери фото"), 7)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 7 || resultCode != RESULT_OK || data == null) return
+        val uris = mutableListOf<Uri>()
+        data.clipData?.let { c -> for (i in 0 until c.itemCount) uris += c.getItemAt(i).uri }
+        if (uris.isEmpty()) data.data?.let { uris += it }
+        Thread {
+            for (u in uris.take(5)) {
+                try { pending += savePhoto(u) } catch (e: Exception) {
+                    runOnUiThread { add(K_STATUS, "Не удалось открыть фото: ${e.message}") }
+                }
+            }
+            runOnUiThread { updateAttach() }
+        }.start()
+    }
+
+    /** Downscale, fix rotation, save into the site's image folder; returns (site path, jpeg). */
+    private fun savePhoto(uri: Uri): Pair<String, ByteArray> {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)!!.use { BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 1568) sample *= 2
+        var bmp = contentResolver.openInputStream(uri)!!.use {
+            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+        } ?: throw IllegalStateException("не картинка")
+        val rotation = try {
+            contentResolver.openInputStream(uri)!!.use {
+                when (android.media.ExifInterface(it).getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1)) {
+                    6 -> 90f; 3 -> 180f; 8 -> 270f; else -> 0f
+                }
+            }
+        } catch (_: Exception) { 0f }
+        val scale = minOf(1f, 1568f / maxOf(bmp.width, bmp.height))
+        if (rotation != 0f || scale < 1f) {
+            val m = Matrix().apply { postScale(scale, scale); postRotate(rotation) }
+            bmp = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
+        }
+        val out = ByteArrayOutputStream()
+        bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+        val jpg = out.toByteArray()
+        val st = Stack(applicationContext)
+        val dir = File(st.htdocs, "image/catalog/uploads").apply { mkdirs() }
+        val name = "photo_" + java.text.SimpleDateFormat("yyyyMMdd_HHmmss_SSS", java.util.Locale.US).format(java.util.Date()) + ".jpg"
+        File(dir, name).writeBytes(jpg)
+        return "image/catalog/uploads/$name" to jpg
     }
 
     private fun settings() {

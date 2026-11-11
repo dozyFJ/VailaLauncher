@@ -4,7 +4,10 @@ import com.anthropic.client.AnthropicClient
 import com.anthropic.client.okhttp.AnthropicOkHttpClient
 import com.anthropic.core.JsonValue
 import com.anthropic.errors.AnthropicServiceException
+import com.anthropic.models.messages.Base64ImageSource
 import com.anthropic.models.messages.ContentBlockParam
+import com.anthropic.models.messages.ImageBlockParam
+import com.anthropic.models.messages.Tool
 import com.anthropic.models.messages.Message
 import com.anthropic.models.messages.MessageCreateParams
 import com.anthropic.models.messages.MessageParam
@@ -23,7 +26,12 @@ import java.util.concurrent.TimeUnit
  * AI assistant that edits the local OpenCart site: Claude with the bash and
  * text editor tools, both executed here on the phone inside the app sandbox.
  */
-class Agent(private val st: Stack, apiKey: String, private val model: String) {
+class Agent(
+    private val st: Stack,
+    apiKey: String,
+    private val model: String,
+    private val screenshot: ((String) -> ByteArray?)? = null,
+) {
 
     /** Events for the chat UI. */
     sealed class Event {
@@ -40,12 +48,18 @@ class Agent(private val st: Stack, apiKey: String, private val model: String) {
     private val mapper = ObjectMapper()
 
     /** Run one user request to completion; [history] is updated in place. */
-    fun run(history: MutableList<MessageParam>, userText: String, emit: (Event) -> Unit, cancelled: () -> Boolean) {
+    fun run(
+        history: MutableList<MessageParam>,
+        userText: String,
+        images: List<ByteArray>,
+        emit: (Event) -> Unit,
+        cancelled: () -> Boolean,
+    ) {
         val start = history.size
         fun rollback() { while (history.size > start) history.removeAt(history.lastIndex) }
-        history += MessageParam.ofUserOfContentBlockParams(
-            listOf(ContentBlockParam.ofText(TextBlockParam.builder().text(userText).build()))
-        )
+        val content = images.map { ContentBlockParam.ofImage(image(it)) } +
+            ContentBlockParam.ofText(TextBlockParam.builder().text(userText).build())
+        history += MessageParam.ofUserOfContentBlockParams(content)
         for (step in 1..MAX_STEPS) {
             if (cancelled()) {
                 // History must not end with tool_use lacking results; it ends with
@@ -80,6 +94,26 @@ class Agent(private val st: Stack, apiKey: String, private val model: String) {
                 block.text().ifPresent { t -> if (t.text().isNotBlank()) emit(Event.Text(t.text())) }
                 block.toolUse().ifPresent { tu ->
                     val input = toJson(tu._input())
+                    if (tu.name() == "view_site") {
+                        val path = input.optString("path", "/")
+                        val jpg = screenshot?.invoke(path)
+                        if (jpg == null) {
+                            emit(Event.Tool("👁 $path", "Не удалось снять скриншот (сервер запущен?)", true))
+                            results += ContentBlockParam.ofToolResult(
+                                ToolResultBlockParam.builder().toolUseId(tu.id())
+                                    .content("Не удалось открыть страницу. Проверь, что PHP-сервер запущен.")
+                                    .isError(true).build()
+                            )
+                        } else {
+                            emit(Event.Tool("👁 $path", "Скриншот ${jpg.size / 1024} КБ", false))
+                            results += ContentBlockParam.ofToolResult(
+                                ToolResultBlockParam.builder().toolUseId(tu.id())
+                                    .contentOfBlocks(listOf(ToolResultBlockParam.Content.Block.ofImage(image(jpg))))
+                                    .build()
+                            )
+                        }
+                        return@ifPresent
+                    }
                     val (title, out, err) = when (tu.name()) {
                         "bash" -> bash(input)
                         "str_replace_based_edit_tool" -> editor(input)
@@ -116,12 +150,43 @@ class Agent(private val st: Stack, apiKey: String, private val model: String) {
             .system(systemPrompt())
             .addTool(ToolBash20250124.builder().build())
             .addTool(ToolTextEditor20250728.builder().build())
+            .addTool(viewSiteTool)
             .outputConfig(OutputConfig.builder().effort(OutputConfig.Effort.HIGH).build())
             .messages(history)
             // Server-side fallback: a refused request is retried on a suitable model.
             .putAdditionalHeader("anthropic-beta", "server-side-fallback-2026-07-01")
             .putAdditionalBodyProperty("fallbacks", JsonValue.from("default"))
             .build()
+
+    private val viewSiteTool: Tool = Tool.builder()
+        .name("view_site")
+        .description(
+            "Открывает страницу локального сайта в мобильном браузере (ширина телефона) и возвращает скриншот. " +
+                "Используй, чтобы посмотреть, как выглядит сайт до и после правок дизайна."
+        )
+        .inputSchema(
+            Tool.InputSchema.builder()
+                .properties(
+                    Tool.InputSchema.Properties.builder()
+                        .putAdditionalProperty(
+                            "path",
+                            JsonValue.from(mapOf("type" to "string", "description" to "Путь страницы, например / или index.php?route=product/category&path=20"))
+                        )
+                        .build()
+                )
+                .required(listOf("path"))
+                .build()
+        )
+        .build()
+
+    private fun image(jpg: ByteArray): ImageBlockParam = ImageBlockParam.builder()
+        .source(
+            Base64ImageSource.builder()
+                .data(android.util.Base64.encodeToString(jpg, android.util.Base64.NO_WRAP))
+                .mediaType(Base64ImageSource.MediaType.IMAGE_JPEG)
+                .build()
+        )
+        .build()
 
     private fun systemPrompt() = """
         Ты — ИИ-мастер внутри Android-приложения VailaLauncher. Оно запускает на телефоне
@@ -139,6 +204,12 @@ class Agent(private val st: Stack, apiKey: String, private val model: String) {
           Нет root, нет apt/pkg, нет git и composer. Доступны php и mariadb.
         - Инструмент str_replace_based_edit_tool работает только внутри ${st.base.path};
           относительные пути считаются от папки сайта.
+
+        - Инструмент view_site делает скриншот страницы сайта, как на телефоне. После правок дизайна
+          посмотри результат и при необходимости поправь.
+        - Фото, которые присылает пользователь, уже сохранены в image/catalog/uploads/ (путь указан в сообщении).
+          В OpenCart картинки товаров и логотип задаются путём относительно image/, например catalog/uploads/x.jpg
+          (логотип: ключ config_logo в oc_setting, store_id=0, code=config).
 
         OpenCart 4:
         - Шаблоны витрины: catalog/view/template/ (Twig), стили: catalog/view/stylesheet/stylesheet.css,
