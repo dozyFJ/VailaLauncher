@@ -27,20 +27,20 @@ jobs:
         run: ./gradlew --no-daemon assembleRelease
 
       - name: Rename
-        run: cp app/build/outputs/apk/release/app-release.apk VailaLauncher.apk && ls -lh VailaLauncher.apk
+        run: cp app/build/outputs/apk/release/app-release.apk PocketShopServer.apk && ls -lh PocketShopServer.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: VailaLauncher-apk
-          path: VailaLauncher.apk
+          name: PocketShopServer-apk
+          path: PocketShopServer.apk
 
       - name: Publish "latest" release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest -y --cleanup-tag || true
-          gh release create latest VailaLauncher.apk \
+          gh release create latest PocketShopServer.apk \
             --prerelease \
             --target "$GITHUB_SHA" \
-            --title "VailaLauncher (сборка #${{ github.run_number }})" \
-            --notes "Автосборка из ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}. Скачай VailaLauncher.apk ниже."
+            --title "PocketShop Server (сборка #${{ github.run_number }})" \
+            --notes "Автосборка из ${GITHUB_REF_NAME} @ ${GITHUB_SHA::7}. Скачай PocketShopServer.apk ниже."

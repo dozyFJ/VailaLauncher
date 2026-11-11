@@ -258,12 +258,12 @@ class MainActivity : Activity() {
             val values = android.content.ContentValues().apply {
                 put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, f.name)
                 put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/zip")
-                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Download/VailaLauncher")
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Download/PocketShop")
             }
             val uri = contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: throw java.io.IOException("Не удалось создать файл в Загрузках")
             contentResolver.openOutputStream(uri)!!.use { out -> f.inputStream().use { it.copyTo(out) } }
-            return "Сохранено: Загрузки/VailaLauncher/${f.name}\n(${f.length() / 1024 / 1024} МБ)"
+            return "Сохранено: Загрузки/PocketShop/${f.name}\n(${f.length() / 1024 / 1024} МБ)"
         }
         val dir = getExternalFilesDir(null) ?: throw java.io.IOException("Нет внешнего хранилища")
         val dest = File(dir, f.name)

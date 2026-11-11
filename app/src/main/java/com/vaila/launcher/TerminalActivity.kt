@@ -76,13 +76,13 @@ class TerminalActivity : Activity() {
         val rc = File(home, ".shrc")
         rc.writeText(
             """
-            export PS1='vaila:${'$'}{PWD##*/} ${'$'} '
+            export PS1='shop:${'$'}{PWD##*/} ${'$'} '
             alias mysql='mariadb -h 127.0.0.1 -P ${Stack.MYSQL_PORT} -u root'
             alias mariadb='mariadb -h 127.0.0.1 -P ${Stack.MYSQL_PORT} -u root'
             alias php='php -c ${st.phpIni.path}'
             alias ll='ls -la'
             alias www='cd ${st.htdocs.path}'
-            echo "VailaLauncher terminal. www = папка сайта, mysql = консоль базы, php -v"
+            echo "PocketShop terminal. www = папка сайта, mysql = консоль базы, php -v"
             """.trimIndent() + "\n"
         )
         return st.shellEnv() + arrayOf("ENV=${rc.path}", "COLORTERM=truecolor")

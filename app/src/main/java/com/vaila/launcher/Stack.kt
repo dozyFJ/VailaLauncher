@@ -294,7 +294,7 @@ class Stack(private val ctx: Context) {
 
         progress("Упаковываю файлы сайта…")
         val stamp = java.text.SimpleDateFormat("yyyy-MM-dd_HH-mm", java.util.Locale.US).format(java.util.Date())
-        val zip = File(tmp, "vaila-backup-$stamp.zip")
+        val zip = File(tmp, "pocketshop-backup-$stamp.zip")
         java.util.zip.ZipOutputStream(zip.outputStream().buffered()).use { z ->
             z.putNextEntry(java.util.zip.ZipEntry("database/opencart.sql"))
             dump.inputStream().use { it.copyTo(z) }
