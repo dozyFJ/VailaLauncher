@@ -12,7 +12,7 @@ import java.net.URL
  * which has free Flash models). Same tools as the other providers.
  */
 class OpenAiAgent(
-    st: Stack,
+    private val st: Stack,
     private val baseUrl: String,
     private val apiKey: String,
     initialModel: String,
@@ -23,6 +23,7 @@ class OpenAiAgent(
     private val screenshot: ((String) -> ByteArray?)? = null,
 ) {
     private val box = ToolBox(st)
+    private val stCtx get() = st.ctx
 
     /** Retries on 429/5xx before giving up (lower in auto mode to switch faster). */
     var retries = 3
@@ -35,7 +36,7 @@ class OpenAiAgent(
     private var model = initialModel
     private var replaced = false
     private val system = ToolBox.systemPrompt(st) +
-        if (vision) "" else "\nЭта модель не видит изображения: присланные фото доступны только как файлы по указанным путям, скриншоты view_site недоступны."
+        if (vision) "" else "\nЭта модель не видит изображения: присланные фото доступны только как файлы по указанным путям; view_site вернёт текстовое описание страницы."
 
     class ApiException(val code: Int, message: String) : IOException(message)
 
@@ -48,7 +49,15 @@ class OpenAiAgent(
     ): Boolean {
         val start = history.length()
         fun rollback() { while (history.length() > start) history.remove(history.length() - 1) }
-        history.put(userMessage(userText, images))
+        var text = userText
+        if (!vision && images.isNotEmpty()) {
+            emit(Agent.Event.Status("Модель не видит фото — прошу описать их модель со зрением…"))
+            images.forEachIndexed { i, jpg ->
+                val d = runCatching { Vision.describe(stCtx, jpg) }.getOrNull()
+                if (d != null) text += "\n\nОписание фото ${i + 1}: $d"
+            }
+        }
+        history.put(userMessage(text, images))
 
         for (step in 1..Agent.MAX_STEPS) {
             if (cancelled()) { emit(Agent.Event.Status("Остановлено")); return true }
@@ -124,8 +133,12 @@ class OpenAiAgent(
                 .put("old_str", a.optString("old_str")).put("new_str", a.optString("new_str")))
             "view_site" -> {
                 val path = a.optString("path", "/")
-                if (!vision) Triple("👁 $path", "Эта модель не видит изображения — скриншот недоступен.", true)
-                else {
+                if (!vision) {
+                    val jpg = screenshot?.invoke(path)
+                    val desc = jpg?.let { runCatching { Vision.describe(stCtx, it) }.getOrNull() }
+                    if (desc != null) Triple("👁 $path (описание)", "Описание скриншота от модели со зрением:\n$desc", false)
+                    else Triple("👁 $path (текст)", "Скриншот описать некому (нет ключей моделей со зрением). Вместо него — текст страницы:\n" + box.pageText(path), false)
+                } else {
                     val jpg = screenshot?.invoke(path)
                     if (jpg == null) Triple("👁 $path", "Не удалось снять скриншот. Проверь, что PHP-сервер запущен.", true)
                     else { shots += jpg; Triple("👁 $path", "Скриншот приложен следующим сообщением.", false) }

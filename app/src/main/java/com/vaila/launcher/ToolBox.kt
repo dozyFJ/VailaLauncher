@@ -8,6 +8,24 @@ import java.util.concurrent.TimeUnit
 class ToolBox(private val st: Stack) {
     private val knowledge by lazy { Knowledge(st) }
 
+    /** Visible text of a local page, for models without vision. */
+    fun pageText(path: String): String = try {
+        val c = java.net.URL("http://127.0.0.1:${Stack.HTTP_PORT}/" + path.trimStart('/')).openConnection() as java.net.HttpURLConnection
+        c.connectTimeout = 5000
+        c.readTimeout = 30000
+        val html = c.inputStream.bufferedReader().readText()
+        val title = Regex("(?is)<title[^>]*>(.*?)</title>").find(html)?.groupValues?.get(1)?.trim().orEmpty()
+        val body = html.replace(Regex("(?is)<(script|style)[^>]*>.*?</\\1>"), " ")
+            .replace(Regex("(?i)<(br|/p|/div|/li|/h[1-6])[^>]*>"), "\n")
+            .replace(Regex("<[^>]+>"), " ")
+            .replace(Regex("[ \t]+"), " ")
+            .replace(Regex("\n\\s*\n+"), "\n")
+            .trim()
+        "Заголовок: $title\nТекст страницы:\n" + body.take(3000)
+    } catch (e: Exception) {
+        "Не удалось открыть страницу: ${e.message}"
+    }
+
     /** remember / search_kb / learn_url, or null if [name] is not one of them. */
     fun extra(name: String, a: JSONObject) = knowledge.exec(name, a)
 
