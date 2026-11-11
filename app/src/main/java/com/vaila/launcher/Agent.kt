@@ -118,7 +118,7 @@ class Agent(
                     val (title, out, err) = when (tu.name()) {
                         "bash" -> box.bash(input)
                         "str_replace_based_edit_tool" -> box.editor(input)
-                        else -> Triple(tu.name(), "Unknown tool ${tu.name()}", true)
+                        else -> box.extra(tu.name(), input) ?: Triple(tu.name(), "Unknown tool ${tu.name()}", true)
                     }
                     emit(Event.Tool(title, out, err))
                     results += ContentBlockParam.ofToolResult(
@@ -152,6 +152,7 @@ class Agent(
             .addTool(ToolBash20250124.builder().build())
             .addTool(ToolTextEditor20250728.builder().build())
             .addTool(viewSiteTool)
+            .apply { knowledgeTools.forEach { addTool(it) } }
             .outputConfig(OutputConfig.builder().effort(OutputConfig.Effort.HIGH).build())
             .messages(history)
             // Server-side fallback: a refused request is retried on a suitable model.
@@ -179,6 +180,34 @@ class Agent(
                 .build()
         )
         .build()
+
+    /** remember / search_kb / learn_url, built from the shared definitions. */
+    private val knowledgeTools: List<Tool> by lazy {
+        val all = GeminiAgent.TOOLS
+        (0 until all.length()).map { all.getJSONObject(it) }
+            .filter { it.getString("name") in setOf("remember", "search_kb", "learn_url") }
+            .map { f ->
+                val params = f.getJSONObject("parameters")
+                val props = params.getJSONObject("properties")
+                val pb = Tool.InputSchema.Properties.builder()
+                props.keys().forEach { k ->
+                    val p = props.getJSONObject(k)
+                    pb.putAdditionalProperty(k, JsonValue.from(mapOf(
+                        "type" to p.getString("type").lowercase(),
+                        "description" to p.optString("description"),
+                    )))
+                }
+                val req = params.getJSONArray("required")
+                Tool.builder()
+                    .name(f.getString("name"))
+                    .description(f.getString("description"))
+                    .inputSchema(
+                        Tool.InputSchema.builder().properties(pb.build())
+                            .required((0 until req.length()).map { req.getString(it) }).build()
+                    )
+                    .build()
+            }
+    }
 
     private fun image(jpg: ByteArray): ImageBlockParam = ImageBlockParam.builder()
         .source(

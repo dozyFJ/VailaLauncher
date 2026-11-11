@@ -119,7 +119,7 @@ class OpenAiAgent(
                     else { shots += jpg; Triple("👁 $path", "Скриншот приложен следующим сообщением.", false) }
                 }
             }
-            else -> Triple(name, "Неизвестный инструмент $name", true)
+            else -> box.extra(name, a) ?: Triple(name, "Неизвестный инструмент $name", true)
         }
 
     private fun callWithRetry(history: JSONArray, emit: (Agent.Event) -> Unit): JSONObject {

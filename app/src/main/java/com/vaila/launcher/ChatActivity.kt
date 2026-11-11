@@ -126,6 +126,8 @@ class ChatActivity : Activity() {
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menu.add(0, 1, 0, "Новый чат")
         menu.add(0, 2, 1, "Ключ и модель")
+        menu.add(0, 3, 2, "🧠 Память ИИ")
+        menu.add(0, 4, 3, "📚 База знаний")
         return true
     }
 
@@ -136,6 +138,8 @@ class ChatActivity : Activity() {
                 add(K_STATUS, "Новый чат.")
             }
             2 -> settings()
+            3 -> memoryDialog()
+            4 -> kbDialog()
         }
         return true
     }
@@ -282,6 +286,8 @@ class ChatActivity : Activity() {
             "👁 Как выглядит сайт" to "Посмотри главную страницу и скажи, что бы ты улучшил.",
             "↩️ Откатить" to "Откати последние изменения файлов из .bak-копий и очисти кеш.",
             "🧹 Кеш" to "Очисти кеш OpenCart.",
+            "📚 Изучи ссылку" to "Изучи страницу  и запомни главное, что пригодится для моего магазина.",
+            "🧠 Запомни" to "Запомни: ",
             "🇷🇺 Русский язык" to "Сделай витрину на русском: поставь русский язык по умолчанию (если пакета нет — переведи основные тексты витрины) и рубли валютой по умолчанию.",
         )
         for ((label, prompt) in quick) {
@@ -291,7 +297,12 @@ class ChatActivity : Activity() {
                 textSize = 12f
                 setOnClickListener {
                     input.setText(prompt)
-                    input.setSelection(prompt.indexOf(" — ").let { if (it >= 0) it + 3 else prompt.length })
+                    val caret = when {
+                        prompt.contains(" — ") -> prompt.indexOf(" — ") + 3
+                        prompt.contains("страницу  ") -> prompt.indexOf("страницу  ") + 9
+                        else -> prompt.length
+                    }
+                    input.setSelection(caret)
                     input.requestFocus()
                 }
             })
@@ -568,6 +579,66 @@ class ChatActivity : Activity() {
                 AlertDialog.Builder(this).setMessage(msg).setPositiveButton("OK", null).show()
             }
         }.start()
+    }
+
+    private fun memoryDialog() {
+        val k = Knowledge(Stack(applicationContext))
+        val et = EditText(this).apply {
+            setText(k.memory())
+            hint = "Пока пусто. ИИ сам будет записывать сюда полезное."
+            textSize = 13f
+            minLines = 8
+            gravity = Gravity.TOP
+        }
+        AlertDialog.Builder(this)
+            .setTitle("🧠 Память ИИ")
+            .setMessage("Это ИИ видит в каждом чате. Можно править руками.")
+            .setView(ScrollView(this).apply { setPadding(px(16), 0, px(16), 0); addView(et) })
+            .setPositiveButton("Сохранить") { _, _ -> k.setMemory(et.text.toString().trimEnd() + "\n") }
+            .setNeutralButton("Очистить") { _, _ -> k.setMemory("") }
+            .setNegativeButton("Отмена", null)
+            .show()
+    }
+
+    private fun kbDialog() {
+        val k = Knowledge(Stack(applicationContext))
+        val files = k.files()
+        val items = files.map { "${it.name}  (${it.length() / 1024} КБ)" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("📚 База знаний")
+            .setItems(if (items.isEmpty()) arrayOf("(пусто)") else items) { _, i ->
+                val f = files.getOrNull(i) ?: return@setItems
+                AlertDialog.Builder(this)
+                    .setTitle(f.name)
+                    .setMessage(f.readText().take(3000))
+                    .setPositiveButton("OK", null)
+                    .setNegativeButton("Удалить") { _, _ -> f.delete() }
+                    .show()
+            }
+            .setPositiveButton("+ Добавить по ссылке") { _, _ -> addUrlDialog(k) }
+            .setNegativeButton("Закрыть", null)
+            .show()
+    }
+
+    private fun addUrlDialog(k: Knowledge) {
+        val et = EditText(this).apply {
+            hint = "https://…"
+            inputType = InputType.TYPE_TEXT_VARIATION_URI
+            isSingleLine = true
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Изучить страницу")
+            .setView(LinearLayout(this).apply { setPadding(px(20), 0, px(20), 0); addView(et) })
+            .setPositiveButton("Скачать") { _, _ ->
+                val url = et.text.toString().trim()
+                add(K_STATUS, "Скачиваю $url в базу знаний…")
+                Thread {
+                    val (_, out, err) = k.learnUrl(url)
+                    post(if (err) K_TOOL_ERR else K_TOOL, "🌐 $url\n" + out.take(600))
+                }.start()
+            }
+            .setNegativeButton("Отмена", null)
+            .show()
     }
 
     private fun px(v: Int) = (v * dp).toInt()

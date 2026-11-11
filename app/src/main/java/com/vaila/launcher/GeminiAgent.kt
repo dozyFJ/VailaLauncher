@@ -114,7 +114,7 @@ class GeminiAgent(
                 if (jpg == null) Triple("👁 $path", "Не удалось снять скриншот. Проверь, что PHP-сервер запущен.", true)
                 else { shots += jpg; Triple("👁 $path", "Скриншот приложен следующим изображением (${jpg.size / 1024} КБ).", false) }
             }
-            else -> Triple(name, "Неизвестный инструмент $name", true)
+            else -> box.extra(name, a) ?: Triple(name, "Неизвестный инструмент $name", true)
         }
 
     private fun callWithRetry(history: JSONArray, emit: (Agent.Event) -> Unit): JSONObject {
@@ -214,6 +214,12 @@ class GeminiAgent(
                 JSONObject().put("path", prop("STRING", "Путь к файлу")).put("old_str", prop("STRING", "Точный фрагмент"))
                     .put("new_str", prop("STRING", "Чем заменить")),
                 listOf("path", "old_str", "new_str")))
+            .put(fn("remember", "Запомнить полезный факт или удачный рецепт в долговременную память (видна в следующих чатах).",
+                JSONObject().put("note", prop("STRING", "Короткая заметка")), listOf("note")))
+            .put(fn("search_kb", "Поиск по базе знаний (шпаргалка OpenCart, изученные страницы) и памяти.",
+                JSONObject().put("query", prop("STRING", "Что искать, ключевые слова")), listOf("query")))
+            .put(fn("learn_url", "Скачать страницу из интернета и сохранить её текст в базу знаний.",
+                JSONObject().put("url", prop("STRING", "Ссылка http(s)://")), listOf("url")))
             .put(fn("view_site", "Сделать скриншот страницы локального сайта в ширину телефона, чтобы посмотреть дизайн.",
                 JSONObject().put("path", prop("STRING", "Путь страницы, например /")), listOf("path")))
 

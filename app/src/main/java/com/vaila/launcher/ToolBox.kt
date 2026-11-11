@@ -6,6 +6,10 @@ import java.util.concurrent.TimeUnit
 
 /** Tools the AI assistant runs on the phone: shell and a file editor confined to the app dir. */
 class ToolBox(private val st: Stack) {
+    private val knowledge by lazy { Knowledge(st) }
+
+    /** remember / search_kb / learn_url, or null if [name] is not one of them. */
+    fun extra(name: String, a: JSONObject) = knowledge.exec(name, a)
 
     fun bash(input: JSONObject): Triple<String, String, Boolean> {
         if (input.optBoolean("restart")) return Triple("bash restart", "Shell перезапущен.", false)
@@ -151,6 +155,6 @@ class ToolBox(private val st: Stack) {
             - Перед большими правками делай копию файла (cp file file.bak), чтобы можно было откатить.
             - Не удаляй базу и не трогай config.php без явной просьбы.
             Пиши кратко. Если задача неоднозначна, сделай разумный вариант и предложи, что можно поменять.
-        """.trimIndent()
+        """.trimIndent() + Knowledge(st).promptSection()
     }
 }

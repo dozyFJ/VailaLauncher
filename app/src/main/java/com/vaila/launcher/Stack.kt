@@ -10,7 +10,7 @@ import java.net.Socket
 import java.util.zip.ZipInputStream
 
 /** Files and processes of the local PHP + MariaDB stack. */
-class Stack(private val ctx: Context) {
+class Stack(val ctx: Context) {
     val base: File = ctx.filesDir
     val usr = File(base, "usr")
     val bin = File(usr, "bin")
