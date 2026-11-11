@@ -18,6 +18,11 @@ object LocalLlm {
 
     val MODELS = listOf(
         Model(
+            "qwen3-0.6b", "Qwen3 0.6B — микро, самая быстрая (≈0.4 ГБ)",
+            "https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q4_K_M.gguf",
+            400_000_000L, noThink = true,
+        ),
+        Model(
             "qwen3-1.7b", "Qwen3 1.7B — быстрая (≈1.1 ГБ)",
             "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf",
             1_100_000_000L, noThink = true,
@@ -35,7 +40,7 @@ object LocalLlm {
     fun dir(ctx: Context) = File(ctx.filesDir, "models").apply { mkdirs() }
     fun file(ctx: Context, m: Model) = File(dir(ctx), m.id + ".gguf")
     fun selected(ctx: Context): Model {
-        val id = ctx.getSharedPreferences("ai", Context.MODE_PRIVATE).getString("lmodel", MODELS[0].id)
+        val id = ctx.getSharedPreferences("ai", Context.MODE_PRIVATE).getString("lmodel", "qwen3-1.7b")
         return MODELS.firstOrNull { it.id == id } ?: MODELS[0]
     }
 
