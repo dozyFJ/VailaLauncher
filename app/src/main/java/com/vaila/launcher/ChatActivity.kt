@@ -37,6 +37,7 @@ class ChatActivity : Activity() {
         val glmHistory = org.json.JSONArray()
         val localHistory = org.json.JSONArray()
         val orHistories = HashMap<String, org.json.JSONArray>()
+        val openAiHistory = org.json.JSONArray()
         val transcript = mutableListOf<Pair<Int, String>>() // kind, text
         @Volatile var running = false
         @Volatile var cancel = false
@@ -135,7 +136,7 @@ class ChatActivity : Activity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
             1 -> if (!running) {
-                history.clear(); clearGemini(); clear(glmHistory); clear(localHistory); orHistories.clear(); transcript.clear(); list.removeAllViews()
+                history.clear(); clearGemini(); clear(glmHistory); clear(localHistory); orHistories.clear(); clear(openAiHistory); transcript.clear(); list.removeAllViews()
                 add(K_STATUS, "Новый чат.")
             }
             2 -> settings()
@@ -194,6 +195,17 @@ class ChatActivity : Activity() {
                 val st = Stack(applicationContext)
                 if (prov == "auto") {
                     runAuto(st, text, images, emit, shot)
+                } else if (prov == "openai") {
+                    val m = prefs.getString("oamodel", OpenAiAgent.OPENAI_DEFAULT_MODEL) ?: OpenAiAgent.OPENAI_DEFAULT_MODEL
+                    OpenAiAgent(st, OpenAiAgent.OPENAI_BASE, key, m, vision = true, fast = false) { path -> shot.capture(path) }
+                        .apply {
+                            tokenField = "max_completion_tokens"
+                            replaceModel = {
+                                OpenAiAgent.pickOpenAi(OpenAiAgent.listOpenAi(key))
+                                    ?.also { prefs.edit().putString("oamodel", it).apply() }
+                            }
+                        }
+                        .run(openAiHistory, text, images, emit) { cancel }
                 } else if (prov == "openrouter") {
                     val m = FreeModels.best(this, images.isNotEmpty())
                     if (m == null) post(K_STATUS, "Не удалось получить список бесплатных моделей OpenRouter. Проверь интернет.")
@@ -458,11 +470,11 @@ class ChatActivity : Activity() {
 
     private fun isGemini() = provider() == "gemini"
     private fun providerName() = when (provider()) {
-        "auto" -> "Авто"; "gemini" -> "Gemini"; "glm" -> "GLM"; "local" -> "Локальный"; "openrouter" -> "OpenRouter"; else -> "Claude"
+        "auto" -> "Авто"; "gemini" -> "Gemini"; "glm" -> "GLM"; "local" -> "Локальный"; "openrouter" -> "OpenRouter"; "openai" -> "ChatGPT"; else -> "Claude"
     }
     private fun currentKey() = when (provider()) {
         "local", "auto" -> provider()
-        else -> prefs.getString(when (provider()) { "gemini" -> "gkey"; "glm" -> "zkey"; "openrouter" -> "orkey"; else -> "key" }, "").orEmpty()
+        else -> prefs.getString(when (provider()) { "gemini" -> "gkey"; "glm" -> "zkey"; "openrouter" -> "orkey"; "openai" -> "oakey"; else -> "key" }, "").orEmpty()
     }
     private fun clear(a: org.json.JSONArray) { while (a.length() > 0) a.remove(a.length() - 1) }
     private fun clearGemini() = clear(geminiHistory)
@@ -493,8 +505,9 @@ class ChatActivity : Activity() {
         val rbL = RadioButton(this).apply { text = "Локальный ИИ — на телефоне, офлайн, бесплатно"; id = 204 }
         val rbA = RadioButton(this).apply { text = "🔄 Авто — сам выбирает лучшую бесплатную и переключается (рекомендуется)"; id = 205 }
         val rbO = RadioButton(this).apply { text = "OpenRouter — лучшая бесплатная модель из каталога"; id = 206 }
-        prov.addView(rbA); prov.addView(rbG); prov.addView(rbZ); prov.addView(rbO); prov.addView(rbL); prov.addView(rbC)
-        prov.check(when (provider()) { "auto" -> 205; "gemini" -> 201; "glm" -> 203; "local" -> 204; "openrouter" -> 206; else -> 202 })
+        val rbP = RadioButton(this).apply { text = "ChatGPT (OpenAI API) — платно"; id = 207 }
+        prov.addView(rbA); prov.addView(rbG); prov.addView(rbZ); prov.addView(rbO); prov.addView(rbL); prov.addView(rbP); prov.addView(rbC)
+        prov.check(when (provider()) { "auto" -> 205; "gemini" -> 201; "glm" -> 203; "local" -> 204; "openrouter" -> 206; "openai" -> 207; else -> 202 })
         label("«Авто» использует все бесплатные ключи ниже и скачанную локальную модель: если одна упрётся в лимит, сразу переключится на другую.")
         val autoLocal = android.widget.CheckBox(this).apply {
             text = "В «Авто» использовать локальный ИИ, если облако недоступно"
@@ -633,6 +646,38 @@ class ChatActivity : Activity() {
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         box.addView(lRow)
 
+        label("ChatGPT (OpenAI API)", true)
+        label("Ключ: platform.openai.com → API keys. Платно, отдельно от подписки ChatGPT.")
+        val oakey = keyField("oakey", "sk-…")
+        val oamodel = EditText(this).apply {
+            hint = OpenAiAgent.OPENAI_DEFAULT_MODEL
+            setText(prefs.getString("oamodel", OpenAiAgent.OPENAI_DEFAULT_MODEL))
+            isSingleLine = true
+        }
+        val oRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        oRow.addView(oamodel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        oRow.addView(Button(this).apply {
+            text = "Список"
+            isAllCaps = false
+            setOnClickListener {
+                val k = oakey.text.toString().trim()
+                if (k.isEmpty()) { android.widget.Toast.makeText(this@ChatActivity, "Сначала вставь ключ", android.widget.Toast.LENGTH_SHORT).show(); return@setOnClickListener }
+                Thread {
+                    val r = runCatching { OpenAiAgent.listOpenAi(k) }
+                    runOnUiThread {
+                        r.onSuccess { ids ->
+                            AlertDialog.Builder(this@ChatActivity).setTitle("Модели OpenAI")
+                                .setItems(ids.toTypedArray()) { _, i -> oamodel.setText(ids[i]) }.show()
+                        }.onFailure {
+                            android.widget.Toast.makeText(this@ChatActivity, "Не получилось: ${it.message}", android.widget.Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }.start()
+            }
+        })
+        label("Модель (mini — дешевле):")
+        box.addView(oRow)
+
         label("Claude", true)
         label("Ключ: console.anthropic.com → API Keys (нужен баланс)")
         val ckey = keyField("key", "sk-ant-…")
@@ -654,7 +699,7 @@ class ChatActivity : Activity() {
             .setPositiveButton("Сохранить") { _, _ ->
                 val idx = (group.checkedRadioButtonId - 100).coerceIn(0, models.lastIndex)
                 val newProv = when (prov.checkedRadioButtonId) {
-                    202 -> "claude"; 203 -> "glm"; 204 -> "local"; 205 -> "auto"; 206 -> "openrouter"; else -> "gemini"
+                    202 -> "claude"; 203 -> "glm"; 204 -> "local"; 205 -> "auto"; 206 -> "openrouter"; 207 -> "openai"; else -> "gemini"
                 }
                 val lm = LocalLlm.MODELS[(lgroup.checkedRadioButtonId - 300).coerceIn(0, LocalLlm.MODELS.lastIndex)]
                 prefs.edit().putString("lmodel", lm.id).apply()
@@ -664,6 +709,8 @@ class ChatActivity : Activity() {
                     .putString("gmodel", gmodel.text.toString().trim().ifEmpty { GeminiAgent.DEFAULT_MODEL })
                     .putString("zkey", zkey.text.toString().trim())
                     .putString("orkey", orkey.text.toString().trim())
+                    .putString("oakey", oakey.text.toString().trim())
+                    .putString("oamodel", oamodel.text.toString().trim().ifEmpty { OpenAiAgent.OPENAI_DEFAULT_MODEL })
                     .putBoolean("auto_local", autoLocal.isChecked)
                     .putString("zmodel", zmodel.text.toString().trim().ifEmpty { OpenAiAgent.ZAI_DEFAULT_MODEL })
                     .putBoolean("zfast", zfast.isChecked)

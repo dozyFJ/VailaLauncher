@@ -15,7 +15,7 @@ class OpenAiAgent(
     st: Stack,
     private val baseUrl: String,
     private val apiKey: String,
-    private val model: String,
+    initialModel: String,
     private val vision: Boolean,
     private val fast: Boolean,
     private val extraBody: JSONObject? = null,
@@ -26,6 +26,14 @@ class OpenAiAgent(
 
     /** Retries on 429/5xx before giving up (lower in auto mode to switch faster). */
     var retries = 3
+
+    /** Name of the output-limit field: OpenAI's newer models want max_completion_tokens. */
+    var tokenField = "max_tokens"
+
+    /** Called once when the model is not found; returns a replacement id or null. */
+    var replaceModel: (() -> String?)? = null
+    private var model = initialModel
+    private var replaced = false
     private val system = ToolBox.systemPrompt(st) +
         if (vision) "" else "\nЭта модель не видит изображения: присланные фото доступны только как файлы по указанным путям, скриншоты view_site недоступны."
 
@@ -132,6 +140,15 @@ class OpenAiAgent(
             try {
                 return call(history)
             } catch (e: ApiException) {
+                if (e.code == 404 && !replaced && replaceModel != null) {
+                    replaced = true
+                    val r = runCatching { replaceModel?.invoke() }.getOrNull()
+                    if (r != null && r != model) {
+                        emit(Agent.Event.Status("Модель $model недоступна — переключаюсь на $r"))
+                        model = r
+                        continue
+                    }
+                }
                 attempt++
                 if ((e.code == 429 || e.code >= 500) && attempt <= retries) {
                     emit(Agent.Event.Status("Сервер занят или лимит, жду 15 с… (попытка $attempt из $retries)"))
@@ -149,7 +166,7 @@ class OpenAiAgent(
             .put("messages", messages)
             .put("tools", TOOLS)
             .put("tool_choice", "auto")
-            .put("max_tokens", 8192)
+            .put(tokenField, 8192)
         if (fast) body.put("thinking", JSONObject().put("type", "disabled"))
         extraBody?.keys()?.forEach { k -> body.put(k, extraBody.get(k)) }
         val c = URL(baseUrl.trimEnd('/') + "/chat/completions").openConnection() as HttpURLConnection
@@ -180,6 +197,33 @@ class OpenAiAgent(
     companion object {
         const val ZAI_BASE = "https://api.z.ai/api/paas/v4"
         const val ZAI_DEFAULT_MODEL = "glm-4.7-flash"
+        const val OPENAI_BASE = "https://api.openai.com/v1"
+        const val OPENAI_DEFAULT_MODEL = "gpt-5-mini"
+
+        /** Chat-capable models from an OpenAI key, newest first. */
+        fun listOpenAi(key: String): List<String> {
+            val c = URL("$OPENAI_BASE/models").openConnection() as HttpURLConnection
+            c.setRequestProperty("Authorization", "Bearer $key")
+            c.connectTimeout = 20_000
+            c.readTimeout = 30_000
+            val code = c.responseCode
+            val text = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.readText().orEmpty()
+            if (code !in 200..299) throw IOException("HTTP $code: " + text.take(300))
+            val arr = JSONObject(text).optJSONArray("data") ?: JSONArray()
+            val skip = listOf("audio", "realtime", "search", "transcribe", "tts", "image", "instruct", "embedding", "moderation", "codex", "dall", "whisper")
+            val out = mutableListOf<Pair<String, Long>>()
+            for (i in 0 until arr.length()) {
+                val m = arr.getJSONObject(i)
+                val id = m.optString("id")
+                if ((id.startsWith("gpt-") || Regex("^o\\d").containsMatchIn(id)) && skip.none { it in id } &&
+                    !Regex("\\d{4}-\\d{2}-\\d{2}").containsMatchIn(id)) out += id to m.optLong("created")
+            }
+            return out.sortedByDescending { it.second }.map { it.first }
+        }
+
+        /** Replacement when a model is retired: newest "mini" (cheap) or the newest overall. */
+        fun pickOpenAi(ids: List<String>): String? =
+            ids.firstOrNull { it.endsWith("-mini") && it.startsWith("gpt-") } ?: ids.firstOrNull()
 
         /** Same tools as Gemini, converted to JSON-schema (lowercase types). */
         val TOOLS: JSONArray by lazy {
