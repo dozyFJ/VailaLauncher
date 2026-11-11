@@ -34,6 +34,7 @@ class ChatActivity : Activity() {
         // Survives activity recreation (rotation) while the process lives.
         val history = mutableListOf<MessageParam>()
         val geminiHistory = org.json.JSONArray()
+        val glmHistory = org.json.JSONArray()
         val transcript = mutableListOf<Pair<Int, String>>() // kind, text
         @Volatile var running = false
         @Volatile var cancel = false
@@ -57,7 +58,7 @@ class ChatActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        title = "ИИ-мастер · " + if (isGemini()) "Gemini" else "Claude"
+        title = "ИИ-мастер · " + providerName()
         WebView.enableSlowWholeDocumentDraw()
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         list = LinearLayout(this).apply {
@@ -130,7 +131,7 @@ class ChatActivity : Activity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
             1 -> if (!running) {
-                history.clear(); clearGemini(); transcript.clear(); list.removeAllViews()
+                history.clear(); clearGemini(); clear(glmHistory); transcript.clear(); list.removeAllViews()
                 add(K_STATUS, "Новый чат.")
             }
             2 -> settings()
@@ -166,9 +167,13 @@ class ChatActivity : Activity() {
         running = true
         cancel = false
         updateSend()
-        val gemini = isGemini()
-        val model = if (gemini) prefs.getString("gmodel", GeminiAgent.DEFAULT_MODEL) ?: GeminiAgent.DEFAULT_MODEL
-        else prefs.getString("model", Agent.DEFAULT_MODEL) ?: Agent.DEFAULT_MODEL
+        val prov = provider()
+        val model = when (prov) {
+            "gemini" -> prefs.getString("gmodel", GeminiAgent.DEFAULT_MODEL) ?: GeminiAgent.DEFAULT_MODEL
+            "glm" -> prefs.getString("zmodel", OpenAiAgent.ZAI_DEFAULT_MODEL) ?: OpenAiAgent.ZAI_DEFAULT_MODEL
+            else -> prefs.getString("model", Agent.DEFAULT_MODEL) ?: Agent.DEFAULT_MODEL
+        }
+        val glmFast = prefs.getBoolean("zfast", true)
         val images = photos.map { it.second }
         Thread {
             try {
@@ -181,9 +186,13 @@ class ChatActivity : Activity() {
                     }
                 }
                 val st = Stack(applicationContext)
-                if (gemini) {
+                if (prov == "gemini") {
                     GeminiAgent(st, key, model) { path -> shot.capture(path) }
                         .run(geminiHistory, text, images, emit) { cancel }
+                } else if (prov == "glm") {
+                    val vision = Regex("\\d+(\\.\\d+)?v").containsMatchIn(model) || "vision" in model
+                    OpenAiAgent(st, OpenAiAgent.ZAI_BASE, key, model, vision, glmFast) { path -> shot.capture(path) }
+                        .run(glmHistory, text, images, emit) { cancel }
                 } else {
                     Agent(st, key, model) { path -> shot.capture(path) }
                         .run(history, text, images, emit) { cancel }
@@ -342,9 +351,12 @@ class ChatActivity : Activity() {
         return "image/catalog/uploads/$name" to jpg
     }
 
-    private fun isGemini() = prefs.getString("provider", "gemini") == "gemini"
-    private fun currentKey() = prefs.getString(if (isGemini()) "gkey" else "key", "").orEmpty()
-    private fun clearGemini() { while (geminiHistory.length() > 0) geminiHistory.remove(geminiHistory.length() - 1) }
+    private fun provider() = prefs.getString("provider", "gemini") ?: "gemini"
+    private fun isGemini() = provider() == "gemini"
+    private fun providerName() = when (provider()) { "gemini" -> "Gemini"; "glm" -> "GLM"; else -> "Claude" }
+    private fun currentKey() = prefs.getString(when (provider()) { "gemini" -> "gkey"; "glm" -> "zkey"; else -> "key" }, "").orEmpty()
+    private fun clear(a: org.json.JSONArray) { while (a.length() > 0) a.remove(a.length() - 1) }
+    private fun clearGemini() = clear(geminiHistory)
 
     private fun settings() {
         val box = LinearLayout(this).apply {
@@ -367,9 +379,10 @@ class ChatActivity : Activity() {
         label("Какой ИИ использовать", true)
         val prov = RadioGroup(this)
         val rbG = RadioButton(this).apply { text = "Google Gemini — бесплатно (с лимитами)"; id = 201 }
+        val rbZ = RadioButton(this).apply { text = "GLM (Z.ai) — бесплатно, быстрый"; id = 203 }
         val rbC = RadioButton(this).apply { text = "Claude — платно, умнее"; id = 202 }
-        prov.addView(rbG); prov.addView(rbC)
-        prov.check(if (isGemini()) 201 else 202)
+        prov.addView(rbG); prov.addView(rbZ); prov.addView(rbC)
+        prov.check(when (provider()) { "gemini" -> 201; "glm" -> 203; else -> 202 })
         box.addView(prov)
 
         label("Google Gemini", true)
@@ -404,6 +417,34 @@ class ChatActivity : Activity() {
         label("Модель (бесплатны обычно модели Flash и Flash-Lite):")
         box.addView(gRow)
 
+        label("GLM (Z.ai)", true)
+        label("Ключ: z.ai → API Keys (бесплатные модели Flash)")
+        val zkey = keyField("zkey", "ключ Z.ai")
+        val zmodel = EditText(this).apply {
+            hint = OpenAiAgent.ZAI_DEFAULT_MODEL
+            setText(prefs.getString("zmodel", OpenAiAgent.ZAI_DEFAULT_MODEL))
+            isSingleLine = true
+        }
+        val zRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        zRow.addView(zmodel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        zRow.addView(Button(this).apply {
+            text = "Выбрать"
+            isAllCaps = false
+            setOnClickListener {
+                val ids = arrayOf("glm-4.7-flash", "glm-4.6v-flash", "glm-4.5-flash")
+                val names = arrayOf("glm-4.7-flash — бесплатно, текст", "glm-4.6v-flash — бесплатно, видит фото и скриншоты", "glm-4.5-flash — бесплатно, старее")
+                AlertDialog.Builder(this@ChatActivity).setTitle("Модели GLM")
+                    .setItems(names) { _, i -> zmodel.setText(ids[i]) }.show()
+            }
+        })
+        label("Модель:")
+        box.addView(zRow)
+        val zfast = android.widget.CheckBox(this).apply {
+            text = "Быстрый режим (без долгих размышлений)"
+            isChecked = prefs.getBoolean("zfast", true)
+            box.addView(this)
+        }
+
         label("Claude", true)
         label("Ключ: console.anthropic.com → API Keys (нужен баланс)")
         val ckey = keyField("key", "sk-ant-…")
@@ -424,15 +465,18 @@ class ChatActivity : Activity() {
             .setView(ScrollView(this).apply { addView(box) })
             .setPositiveButton("Сохранить") { _, _ ->
                 val idx = (group.checkedRadioButtonId - 100).coerceIn(0, models.lastIndex)
-                val newProv = if (prov.checkedRadioButtonId == 202) "claude" else "gemini"
+                val newProv = when (prov.checkedRadioButtonId) { 202 -> "claude"; 203 -> "glm"; else -> "gemini" }
                 prefs.edit()
                     .putString("provider", newProv)
                     .putString("gkey", gkey.text.toString().trim())
                     .putString("gmodel", gmodel.text.toString().trim().ifEmpty { GeminiAgent.DEFAULT_MODEL })
+                    .putString("zkey", zkey.text.toString().trim())
+                    .putString("zmodel", zmodel.text.toString().trim().ifEmpty { OpenAiAgent.ZAI_DEFAULT_MODEL })
+                    .putBoolean("zfast", zfast.isChecked)
                     .putString("key", ckey.text.toString().trim())
                     .putString("model", models[idx].first)
                     .apply()
-                title = "ИИ-мастер · " + if (newProv == "gemini") "Gemini" else "Claude"
+                title = "ИИ-мастер · " + providerName()
             }
             .setNegativeButton("Отмена", null)
             .show()
