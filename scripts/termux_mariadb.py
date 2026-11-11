@@ -79,7 +79,7 @@ def main():
 
     print("php packages:", " ".join(sorted(n for n in pkgs if n.startswith("php"))))
     print("llama packages:", " ".join(sorted(n for n in pkgs if "llama" in n)))
-    roots_pkgs = ["mariadb", "php"] + [n for n in ("php-gd", "llama-cpp") if n in pkgs]
+    roots_pkgs = ["mariadb", "php"] + [n for n in ("php-gd", "llama-cpp", "git") if n in pkgs]
     want, queue = [], list(roots_pkgs)
     while queue:
         name = queue.pop(0)
@@ -150,6 +150,26 @@ def main():
                 print("llama lib:", fn)
     else:
         print("  WARN: llama-server not found, local AI disabled")
+
+    # git + its https helper (exec path is set at runtime via GIT_EXEC_PATH)
+    git = os.path.join(usr, "bin", "git")
+    if os.path.exists(git):
+        real = os.path.realpath(git)
+        shutil.copy(real, os.path.join(out_usr, "bin", "git"))
+        roots.append(real)
+        core_out = os.path.join(out_usr, "libexec", "git-core")
+        os.makedirs(core_out, exist_ok=True)
+        for helper in ("git-remote-https", "git-remote-http"):
+            hp = os.path.join(usr, "libexec", "git-core", helper)
+            if os.path.exists(hp):
+                hr = os.path.realpath(hp)
+                if os.path.samefile(hr, real):
+                    continue
+                shutil.copy(hr, os.path.join(core_out, helper))
+                roots.append(hr)
+                print("git helper:", helper)
+    else:
+        print("  WARN: git not found")
 
     cert = os.path.join(usr, "etc", "tls", "cert.pem")
     if os.path.exists(cert):

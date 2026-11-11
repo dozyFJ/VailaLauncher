@@ -144,6 +144,12 @@
         </LinearLayout>
 
         <Button
+            android:id="@+id/github"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="🐙 GitHub: отправить / забрать сайт" />
+
+        <Button
             android:id="@+id/battery"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

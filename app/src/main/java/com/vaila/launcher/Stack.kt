@@ -32,6 +32,7 @@ class Stack(val ctx: Context) {
             usr.deleteRecursively()
             unzipAsset("runtime.zip", base)
             bin.listFiles()?.forEach { it.setExecutable(true, false) }
+            File(usr, "libexec/git-core").listFiles()?.forEach { it.setExecutable(true, false) }
             stamp.writeText(ver)
         }
         listOf(etc, tmp, logs).forEach { it.mkdirs() }
@@ -199,6 +200,12 @@ class Stack(val ctx: Context) {
             "PREFIX=${usr.path}",
             "WWW=${htdocs.path}",
             "PATH=${bin.path}:/system/bin:/system/xbin",
+            "GIT_EXEC_PATH=${File(usr, "libexec/git-core").path}",
+            "GIT_CONFIG_NOSYSTEM=1",
+            "GIT_SSL_CAINFO=${File(usr, "etc/tls/cert.pem").path}",
+            "GIT_PAGER=cat",
+            "GIT_EDITOR=true",
+            "GIT_TERMINAL_PROMPT=0",
             "LD_LIBRARY_PATH=${lib.path}",
             "TERMINFO=${File(share, "terminfo").path}",
             "TERM=xterm-256color",
@@ -329,7 +336,7 @@ class Stack(val ctx: Context) {
     }
 
     fun logsText(): String = buildString {
-        for (n in listOf("php_server.log", "php_errors.log", "mysql.log", "mysql_bootstrap.log", "install.log", "service.log")) {
+        for (n in listOf("php_server.log", "php_errors.log", "mysql.log", "mysql_bootstrap.log", "install.log", "git.log", "service.log")) {
             val f = File(logs, n)
             if (f.exists()) append("===== $n =====\n").append(tail(f, 6000)).append("\n\n")
         }

@@ -155,7 +155,7 @@ class ToolBox(private val st: Stack) {
               Консоль: mariadb -h 127.0.0.1 -u root ${Stack.DB_NAME} -e "SQL"
             - Shell: Android /system/bin/sh (mksh + toybox: ls, cat, sed, grep, find, cp, mv, unzip…).
               Каждая команда shell запускается заново в папке сайта; cd между вызовами не сохраняется.
-              Нет root, нет apt/pkg, нет git и composer. Доступны php и mariadb.
+              Нет root, нет apt/pkg и composer. Доступны php, mariadb и git.
             - Инструменты работы с файлами работают только внутри ${st.base.path};
               относительные пути считаются от папки сайта.
 

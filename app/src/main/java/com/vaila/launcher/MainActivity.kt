@@ -62,6 +62,7 @@ class MainActivity : Activity() {
         }
         findViewById<Button>(R.id.battery).setOnClickListener { askBattery() }
         findViewById<Button>(R.id.backup).setOnClickListener { backup() }
+        findViewById<Button>(R.id.github).setOnClickListener { githubDialog() }
         findViewById<Button>(R.id.clear_cache).setOnClickListener {
             val n = Stack(this).clearCache()
             Toast.makeText(this, "Кеш очищен ($n)", Toast.LENGTH_SHORT).show()
@@ -224,6 +225,61 @@ class MainActivity : Activity() {
                 }
             }
             .setNegativeButton("Отмена", null).show()
+    }
+
+    private fun githubDialog() {
+        val prefs = getSharedPreferences("git", MODE_PRIVATE)
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, 0)
+        }
+        box.addView(TextView(this).apply {
+            text = "1) Создай на github.com пустой репозиторий (лучше приватный).\n" +
+                "2) Токен: github.com → Settings → Developer settings → Fine-grained tokens → доступ к этому репо, Contents: Read and write.\n" +
+                "Токен хранится только на телефоне."
+        })
+        val repo = android.widget.EditText(this).apply {
+            hint = "владелец/репозиторий"
+            setText(prefs.getString("repo", ""))
+            isSingleLine = true
+        }
+        val token = android.widget.EditText(this).apply {
+            hint = "github_pat_…"
+            setText(prefs.getString("token", ""))
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            isSingleLine = true
+        }
+        box.addView(repo); box.addView(token)
+        fun run(push: Boolean) {
+            val r = repo.text.toString().trim()
+            val t = token.text.toString().trim()
+            prefs.edit().putString("repo", r).putString("token", t).apply()
+            if (r.isEmpty() || t.isEmpty()) { Toast.makeText(this, "Нужны репозиторий и токен", Toast.LENGTH_LONG).show(); return }
+            if (!ServerService.dbRunning()) { Toast.makeText(this, "Сначала нажми «Запустить»: нужна база", Toast.LENGTH_LONG).show(); return }
+            @Suppress("DEPRECATION")
+            val pd = android.app.ProgressDialog(this).apply { setMessage("…"); setCancelable(false); show() }
+            Thread {
+                val res = runCatching {
+                    val g = GitSync(Stack(this), r, t)
+                    if (push) g.push { m -> runOnUiThread { pd.setMessage(m) } } else g.pull { m -> runOnUiThread { pd.setMessage(m) } }
+                }
+                runOnUiThread {
+                    pd.dismiss()
+                    AlertDialog.Builder(this)
+                        .setTitle(if (res.isSuccess) "Готово ✅" else "Не получилось")
+                        .setMessage(res.getOrElse { it.message ?: it.toString() })
+                        .setPositiveButton("OK", null).show()
+                }
+            }.start()
+        }
+        AlertDialog.Builder(this)
+            .setTitle("🐙 GitHub")
+            .setView(box)
+            .setPositiveButton("⬆ Отправить") { _, _ -> run(true) }
+            .setNeutralButton("⬇ Забрать") { _, _ -> run(false) }
+            .setNegativeButton("Закрыть", null)
+            .show()
     }
 
     private fun backup() {
