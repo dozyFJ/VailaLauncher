@@ -31,14 +31,28 @@ import com.anthropic.models.messages.MessageParam
 class ChatActivity : Activity() {
 
     companion object {
+        /** One conversation: its own history for every provider and its transcript. */
+        class ChatState(var title: String) {
+            val history = mutableListOf<MessageParam>()
+            val geminiHistory = org.json.JSONArray()
+            val glmHistory = org.json.JSONArray()
+            val localHistory = org.json.JSONArray()
+            val orHistories = HashMap<String, org.json.JSONArray>()
+            val openAiHistory = org.json.JSONArray()
+            val transcript = mutableListOf<Pair<Int, String>>()
+        }
+
         // Survives activity recreation (rotation) while the process lives.
-        val history = mutableListOf<MessageParam>()
-        val geminiHistory = org.json.JSONArray()
-        val glmHistory = org.json.JSONArray()
-        val localHistory = org.json.JSONArray()
-        val orHistories = HashMap<String, org.json.JSONArray>()
-        val openAiHistory = org.json.JSONArray()
-        val transcript = mutableListOf<Pair<Int, String>>() // kind, text
+        val chats = mutableListOf(ChatState("Чат 1"))
+        var cur = 0
+        val chat get() = chats[cur]
+        val history get() = chat.history
+        val geminiHistory get() = chat.geminiHistory
+        val glmHistory get() = chat.glmHistory
+        val localHistory get() = chat.localHistory
+        val orHistories get() = chat.orHistories
+        val openAiHistory get() = chat.openAiHistory
+        val transcript get() = chat.transcript
         @Volatile var running = false
         @Volatile var cancel = false
         var listener: ((Int, String) -> Unit)? = null
@@ -69,6 +83,7 @@ class ChatActivity : Activity() {
             setPadding(px(12), px(8), px(12), px(8))
         }
         scroll = ScrollView(this).apply { addView(list) }
+        root.addView(topBar())
         root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         root.addView(quickRow())
@@ -117,6 +132,7 @@ class ChatActivity : Activity() {
         list.removeAllViews()
         transcript.toList().forEach { render(it.first, it.second) }
         updateSend()
+        updateTop()
         listener = { k, t -> runOnUiThread { render(k, t); updateSend() } }
     }
 
@@ -136,7 +152,7 @@ class ChatActivity : Activity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
             1 -> if (!running) {
-                history.clear(); clearGemini(); clear(glmHistory); clear(localHistory); orHistories.clear(); clear(openAiHistory); transcript.clear(); list.removeAllViews()
+                chats += ChatState("Чат ${chats.size + 1}"); cur = chats.lastIndex; rerender()
                 add(K_STATUS, "Новый чат.")
             }
             2 -> settings()
@@ -144,6 +160,84 @@ class ChatActivity : Activity() {
             4 -> kbDialog()
         }
         return true
+    }
+
+    private lateinit var chatBtn: Button
+    private lateinit var provBtn: Button
+
+    private fun topBar(): LinearLayout {
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(px(6), px(2), px(6), 0)
+        }
+        chatBtn = Button(this, null, android.R.attr.buttonStyleSmall).apply {
+            isAllCaps = false
+            setOnClickListener { chatSwitcher() }
+        }
+        provBtn = Button(this, null, android.R.attr.buttonStyleSmall).apply {
+            isAllCaps = false
+            setOnClickListener { providerSwitcher() }
+        }
+        bar.addView(chatBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        bar.addView(provBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        updateTop()
+        return bar
+    }
+
+    private fun updateTop() {
+        if (!::chatBtn.isInitialized) return
+        chatBtn.text = "💬 ${chat.title.take(18)} ▾"
+        provBtn.text = "🤖 ${providerName()} ▾"
+        title = "ИИ-мастер · " + providerName()
+    }
+
+    private fun rerender() {
+        list.removeAllViews()
+        if (transcript.isEmpty()) transcript += K_STATUS to "Новый чат. Пиши, что поменять на сайте."
+        transcript.toList().forEach { render(it.first, it.second) }
+        updateTop()
+    }
+
+    private fun chatSwitcher() {
+        if (running) { android.widget.Toast.makeText(this, "Дождись ответа или нажми «Стоп»", android.widget.Toast.LENGTH_SHORT).show(); return }
+        val items = chats.mapIndexed { i, c -> (if (i == cur) "● " else "   ") + c.title } + listOf("➕ Новый чат", "🗑 Удалить текущий")
+        AlertDialog.Builder(this).setTitle("Чаты")
+            .setItems(items.toTypedArray()) { _, i ->
+                when {
+                    i < chats.size -> cur = i
+                    i == chats.size -> { chats += ChatState("Чат ${chats.size + 1}"); cur = chats.lastIndex }
+                    else -> {
+                        if (chats.size == 1) { chats[0] = ChatState("Чат 1") } else { chats.removeAt(cur); cur = 0 }
+                    }
+                }
+                rerender()
+            }.show()
+    }
+
+    private fun providerSwitcher() {
+        if (running) { android.widget.Toast.makeText(this, "Дождись ответа или нажми «Стоп»", android.widget.Toast.LENGTH_SHORT).show(); return }
+        data class P(val id: String, val label: String, val ready: Boolean)
+        fun has(k: String) = !prefs.getString(k, "").isNullOrBlank()
+        val localReady = LocalLlm.MODELS.any { LocalLlm.file(this, it).exists() }
+        val ps = listOf(
+            P("auto", "🔄 Авто — лучшая бесплатная", true),
+            P("glm", "GLM (Z.ai) — бесплатно", has("zkey")),
+            P("gemini", "Gemini — бесплатно", has("gkey")),
+            P("openrouter", "OpenRouter — бесплатно", has("orkey")),
+            P("local", "Локальный — офлайн", localReady),
+            P("openai", "ChatGPT — платно", has("oakey")),
+            P("claude", "Claude — платно", has("key")),
+        )
+        val items = ps.map { (if (it.id == provider()) "● " else "   ") + it.label + if (it.ready) "" else "  (нет ключа)" }
+        AlertDialog.Builder(this).setTitle("Модель")
+            .setItems(items.toTypedArray()) { _, i ->
+                val p = ps[i]
+                prefs.edit().putString("provider", p.id).apply()
+                updateTop()
+                if (!p.ready) settings()
+            }
+            .setNeutralButton("⚙ Ключи…") { _, _ -> settings() }
+            .show()
     }
 
     private fun updateSend() {
@@ -170,6 +264,10 @@ class ChatActivity : Activity() {
             add(K_STATUS, "Подсказка: сервер не запущен. Правки файлов сработают, но для проверки сайта и SQL нажми «Запустить» на главном экране.")
         }
         input.setText("")
+        if (chat.title.matches(Regex("Чат \\d+")) && transcript.none { it.first == K_USER }) {
+            chat.title = text.lineSequence().first().take(24)
+            updateTop()
+        }
         add(K_USER, text)
         running = true
         cancel = false
@@ -717,7 +815,7 @@ class ChatActivity : Activity() {
                     .putString("key", ckey.text.toString().trim())
                     .putString("model", models[idx].first)
                     .apply()
-                title = "ИИ-мастер · " + providerName()
+                updateTop()
             }
             .setNegativeButton("Отмена", null)
             .show()
