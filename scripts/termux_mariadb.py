@@ -135,14 +135,15 @@ def main():
                 shutil.copy(real, os.path.join(out_usr, "lib", "php", fn))
                 roots.append(real)
         print("php extensions:", sorted(os.listdir(os.path.join(out_usr, "lib", "php"))))
-    # llama.cpp server (local AI). ggml may dlopen CPU backends, so ship all of them.
+    # llama.cpp server (local AI). ggml may dlopen CPU backends, so ship all ggml libs;
+    # libllama* come in through the NEEDED closure.
     llama = os.path.join(usr, "bin", "llama-server")
     if os.path.exists(llama):
         real = os.path.realpath(llama)
         shutil.copy(real, os.path.join(out_usr, "bin", "llama-server"))
         roots.append(real)
         for fn in sorted(os.listdir(lib_dir)):
-            if re.match(r"lib(ggml|llama|mtmd)[\w.-]*\.so$", fn):
+            if re.match(r"libggml[\w.-]*\.so$", fn):
                 real = os.path.realpath(os.path.join(lib_dir, fn))
                 shutil.copy(real, os.path.join(out_usr, "lib", fn))
                 roots.append(real)
