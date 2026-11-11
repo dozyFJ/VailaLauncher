@@ -36,6 +36,7 @@ class ChatActivity : Activity() {
         val geminiHistory = org.json.JSONArray()
         val glmHistory = org.json.JSONArray()
         val localHistory = org.json.JSONArray()
+        val orHistories = HashMap<String, org.json.JSONArray>()
         val transcript = mutableListOf<Pair<Int, String>>() // kind, text
         @Volatile var running = false
         @Volatile var cancel = false
@@ -134,7 +135,7 @@ class ChatActivity : Activity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
             1 -> if (!running) {
-                history.clear(); clearGemini(); clear(glmHistory); clear(localHistory); transcript.clear(); list.removeAllViews()
+                history.clear(); clearGemini(); clear(glmHistory); clear(localHistory); orHistories.clear(); transcript.clear(); list.removeAllViews()
                 add(K_STATUS, "Новый чат.")
             }
             2 -> settings()
@@ -191,7 +192,17 @@ class ChatActivity : Activity() {
                     }
                 }
                 val st = Stack(applicationContext)
-                if (prov == "gemini") {
+                if (prov == "auto") {
+                    runAuto(st, text, images, emit, shot)
+                } else if (prov == "openrouter") {
+                    val m = FreeModels.best(this, images.isNotEmpty())
+                    if (m == null) post(K_STATUS, "Не удалось получить список бесплатных моделей OpenRouter. Проверь интернет.")
+                    else {
+                        post(K_STATUS, "Модель: ${m.name}")
+                        OpenAiAgent(st, FreeModels.OPENROUTER_BASE, key, m.id, vision = m.vision, fast = false) { path -> shot.capture(path) }
+                            .run(orHistories.getOrPut(m.id) { org.json.JSONArray() }, text, images, emit) { cancel }
+                    }
+                } else if (prov == "gemini") {
                     GeminiAgent(st, key, model, { path -> shot.capture(path) }) { m ->
                         prefs.edit().putString("gmodel", m).apply()
                     }.run(geminiHistory, text, images, emit) { cancel }
@@ -377,11 +388,82 @@ class ChatActivity : Activity() {
         return "image/catalog/uploads/$name" to jpg
     }
 
-    private fun provider() = prefs.getString("provider", "gemini") ?: "gemini"
+    private fun provider() = prefs.getString("provider", "auto") ?: "auto"
+    /** Tries free providers in turn and switches on errors or limits. */
+    private fun runAuto(st: Stack, text: String, images: List<ByteArray>, emit: (Agent.Event) -> Unit, shot: SiteShot) {
+        val vision = images.isNotEmpty()
+        val cands = mutableListOf<Pair<String, () -> Boolean>>()
+        val gkey = prefs.getString("gkey", "").orEmpty()
+        val zkey = prefs.getString("zkey", "").orEmpty()
+        val orkey = prefs.getString("orkey", "").orEmpty()
+
+        val gemini: () -> Boolean = {
+            GeminiAgent(st, gkey, prefs.getString("gmodel", GeminiAgent.DEFAULT_MODEL) ?: GeminiAgent.DEFAULT_MODEL,
+                { p -> shot.capture(p) }) { m -> prefs.edit().putString("gmodel", m).apply() }
+                .apply { retries = 1 }
+                .run(geminiHistory, text, images, emit) { cancel }
+        }
+        val glm: () -> Boolean = {
+            val model = if (vision) "glm-4.6v-flash"
+                else prefs.getString("zmodel", OpenAiAgent.ZAI_DEFAULT_MODEL) ?: OpenAiAgent.ZAI_DEFAULT_MODEL
+            val v = Regex("\\d+(\\.\\d+)?v").containsMatchIn(model)
+            OpenAiAgent(st, OpenAiAgent.ZAI_BASE, zkey, model, v, prefs.getBoolean("zfast", true)) { p -> shot.capture(p) }
+                .apply { retries = 1 }
+                .run(glmHistory, text, images, emit) { cancel }
+        }
+        if (vision) {
+            if (gkey.isNotBlank()) cands += "Gemini" to gemini
+            if (zkey.isNotBlank()) cands += "GLM" to glm
+        } else {
+            if (zkey.isNotBlank()) cands += "GLM" to glm
+            if (gkey.isNotBlank()) cands += "Gemini" to gemini
+        }
+        if (orkey.isNotBlank()) {
+            post(K_STATUS, "🔎 Ищу лучшие бесплатные модели…")
+            FreeModels.ranked(this, vision).take(3).forEach { m ->
+                cands += "OpenRouter · ${m.name}" to {
+                    OpenAiAgent(st, FreeModels.OPENROUTER_BASE, orkey, m.id, m.vision, false) { p -> shot.capture(p) }
+                        .apply { retries = 0 }
+                        .run(orHistories.getOrPut(m.id) { org.json.JSONArray() }, text, images, emit) { cancel }
+                }
+            }
+        }
+        val lm = LocalLlm.selected(this)
+        if (prefs.getBoolean("auto_local", true) && LocalLlm.file(this, lm).exists()) {
+            cands += "Локальный · ${lm.id}" to {
+                LocalLlm.ensure(st, LocalLlm.file(this, lm)) { post(K_STATUS, it) }
+                val extra = if (lm.noThink) org.json.JSONObject().put("chat_template_kwargs",
+                    org.json.JSONObject().put("enable_thinking", false)) else null
+                OpenAiAgent(st, LocalLlm.BASE, "local", lm.id, vision = false, fast = false,
+                    extraBody = extra, maxToolChars = 3000) { p -> shot.capture(p) }
+                    .run(localHistory, text, images, emit) { cancel }
+            }
+        }
+        if (cands.isEmpty()) {
+            post(K_STATUS, "Для «Авто» добавь хотя бы один бесплатный ключ (GLM, Gemini или OpenRouter) или скачай локальную модель: меню ⋮ → «Ключ и модель».")
+            return
+        }
+        // Start with the provider that worked last time (keeps the conversation together).
+        val last = prefs.getString("auto_last", null)
+        val ordered = cands.sortedBy { if (it.first == last) 0 else 1 }
+        for ((name, run) in ordered) {
+            if (cancel) return
+            post(K_STATUS, "🔄 $name")
+            val ok = try { run() } catch (e: Exception) { post(K_STATUS, "Ошибка: ${e.message}"); false }
+            if (ok) { prefs.edit().putString("auto_last", name).apply(); return }
+            post(K_STATUS, "↪ $name не ответил — переключаюсь на следующую модель")
+        }
+        post(K_STATUS, "Все бесплатные модели сейчас недоступны (лимиты). Подожди пару минут и повтори.")
+    }
+
     private fun isGemini() = provider() == "gemini"
-    private fun providerName() = when (provider()) { "gemini" -> "Gemini"; "glm" -> "GLM"; "local" -> "Локальный"; else -> "Claude" }
-    private fun currentKey() = if (provider() == "local") "local"
-        else prefs.getString(when (provider()) { "gemini" -> "gkey"; "glm" -> "zkey"; else -> "key" }, "").orEmpty()
+    private fun providerName() = when (provider()) {
+        "auto" -> "Авто"; "gemini" -> "Gemini"; "glm" -> "GLM"; "local" -> "Локальный"; "openrouter" -> "OpenRouter"; else -> "Claude"
+    }
+    private fun currentKey() = when (provider()) {
+        "local", "auto" -> provider()
+        else -> prefs.getString(when (provider()) { "gemini" -> "gkey"; "glm" -> "zkey"; "openrouter" -> "orkey"; else -> "key" }, "").orEmpty()
+    }
     private fun clear(a: org.json.JSONArray) { while (a.length() > 0) a.remove(a.length() - 1) }
     private fun clearGemini() = clear(geminiHistory)
 
@@ -409,8 +491,16 @@ class ChatActivity : Activity() {
         val rbZ = RadioButton(this).apply { text = "GLM (Z.ai) — бесплатно, быстрый"; id = 203 }
         val rbC = RadioButton(this).apply { text = "Claude — платно, умнее"; id = 202 }
         val rbL = RadioButton(this).apply { text = "Локальный ИИ — на телефоне, офлайн, бесплатно"; id = 204 }
-        prov.addView(rbG); prov.addView(rbZ); prov.addView(rbL); prov.addView(rbC)
-        prov.check(when (provider()) { "gemini" -> 201; "glm" -> 203; "local" -> 204; else -> 202 })
+        val rbA = RadioButton(this).apply { text = "🔄 Авто — сам выбирает лучшую бесплатную и переключается (рекомендуется)"; id = 205 }
+        val rbO = RadioButton(this).apply { text = "OpenRouter — лучшая бесплатная модель из каталога"; id = 206 }
+        prov.addView(rbA); prov.addView(rbG); prov.addView(rbZ); prov.addView(rbO); prov.addView(rbL); prov.addView(rbC)
+        prov.check(when (provider()) { "auto" -> 205; "gemini" -> 201; "glm" -> 203; "local" -> 204; "openrouter" -> 206; else -> 202 })
+        label("«Авто» использует все бесплатные ключи ниже и скачанную локальную модель: если одна упрётся в лимит, сразу переключится на другую.")
+        val autoLocal = android.widget.CheckBox(this).apply {
+            text = "В «Авто» использовать локальный ИИ, если облако недоступно"
+            isChecked = prefs.getBoolean("auto_local", true)
+            box.addView(this)
+        }
         box.addView(prov)
 
         label("Google Gemini", true)
@@ -473,6 +563,43 @@ class ChatActivity : Activity() {
             box.addView(this)
         }
 
+        label("OpenRouter (каталог бесплатных моделей)", true)
+        label("Ключ: openrouter.ai → Keys (бесплатно, у бесплатных моделей дневной лимит)")
+        val orkey = keyField("orkey", "sk-or-…")
+        val orInfo = TextView(this).apply {
+            val pin = prefs.getString("ormodel", "").orEmpty()
+            text = "Модель: " + pin.ifEmpty { "авто — всегда лучшая бесплатная" }
+            box.addView(this)
+        }
+        box.addView(Button(this).apply {
+            text = "🔎 Найти лучшие бесплатные модели"
+            isAllCaps = false
+            setOnClickListener {
+                text = "Ищу…"
+                Thread {
+                    val r = runCatching { FreeModels.openRouter(this@ChatActivity, force = true) }
+                    runOnUiThread {
+                        text = "🔎 Найти лучшие бесплатные модели"
+                        r.onSuccess { list ->
+                            val top = list.take(25)
+                            val items = (listOf("⭐ Авто — всегда лучшая") + top.mapIndexed { i, m ->
+                                "${i + 1}. ${m.name} · ${m.context / 1000}K" + if (m.vision) " · 👁" else ""
+                            }).toTypedArray()
+                            AlertDialog.Builder(this@ChatActivity)
+                                .setTitle("Бесплатные модели с инструментами: ${list.size}")
+                                .setItems(items) { _, i ->
+                                    val id = if (i == 0) "" else top[i - 1].id
+                                    prefs.edit().putString("ormodel", id).apply()
+                                    orInfo.text = "Модель: " + id.ifEmpty { "авто — всегда лучшая бесплатная" }
+                                }.show()
+                        }.onFailure {
+                            android.widget.Toast.makeText(this@ChatActivity, "Не получилось: ${it.message}", android.widget.Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }.start()
+            }
+        })
+
         label("Локальный ИИ", true)
         label("Память телефона: %.1f ГБ (без «расширения»). Модель скачивается один раз.".format(LocalLlm.totalRamGb(this)))
         val lgroup = RadioGroup(this)
@@ -526,7 +653,9 @@ class ChatActivity : Activity() {
             .setView(ScrollView(this).apply { addView(box) })
             .setPositiveButton("Сохранить") { _, _ ->
                 val idx = (group.checkedRadioButtonId - 100).coerceIn(0, models.lastIndex)
-                val newProv = when (prov.checkedRadioButtonId) { 202 -> "claude"; 203 -> "glm"; 204 -> "local"; else -> "gemini" }
+                val newProv = when (prov.checkedRadioButtonId) {
+                    202 -> "claude"; 203 -> "glm"; 204 -> "local"; 205 -> "auto"; 206 -> "openrouter"; else -> "gemini"
+                }
                 val lm = LocalLlm.MODELS[(lgroup.checkedRadioButtonId - 300).coerceIn(0, LocalLlm.MODELS.lastIndex)]
                 prefs.edit().putString("lmodel", lm.id).apply()
                 prefs.edit()
@@ -534,6 +663,8 @@ class ChatActivity : Activity() {
                     .putString("gkey", gkey.text.toString().trim())
                     .putString("gmodel", gmodel.text.toString().trim().ifEmpty { GeminiAgent.DEFAULT_MODEL })
                     .putString("zkey", zkey.text.toString().trim())
+                    .putString("orkey", orkey.text.toString().trim())
+                    .putBoolean("auto_local", autoLocal.isChecked)
                     .putString("zmodel", zmodel.text.toString().trim().ifEmpty { OpenAiAgent.ZAI_DEFAULT_MODEL })
                     .putBoolean("zfast", zfast.isChecked)
                     .putString("key", ckey.text.toString().trim())

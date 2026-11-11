@@ -55,7 +55,7 @@ class Agent(
         images: List<ByteArray>,
         emit: (Event) -> Unit,
         cancelled: () -> Boolean,
-    ) {
+    ): Boolean {
         val start = history.size
         fun rollback() { while (history.size > start) history.removeAt(history.lastIndex) }
         val content = images.map { ContentBlockParam.ofImage(image(it)) } +
@@ -66,7 +66,7 @@ class Agent(
                 // History must not end with tool_use lacking results; it ends with
                 // our tool results (user turn) here, which is valid to continue from.
                 emit(Event.Status("Остановлено"))
-                return
+                return true
             }
             emit(Event.Status(if (step == 1) "Думаю…" else "Шаг $step…"))
             val msg: Message = try {
@@ -74,11 +74,11 @@ class Agent(
             } catch (e: AnthropicServiceException) {
                 rollback()
                 emit(Event.Status("Ошибка API ${e.statusCode()}: ${e.message}"))
-                return
+                return false
             } catch (e: Exception) {
                 rollback()
                 emit(Event.Status("Ошибка сети: ${e.message}"))
-                return
+                return false
             }
 
             // Keep the full assistant content (incl. thinking blocks) unchanged.
@@ -87,7 +87,7 @@ class Agent(
             val stop = msg.stopReason().orElse(null)
             if (stop == StopReason.REFUSAL) {
                 emit(Event.Status("Claude отказался выполнять этот запрос."))
-                return
+                return true
             }
 
             val results = mutableListOf<ContentBlockParam>()
@@ -133,15 +133,16 @@ class Agent(
 
             if (stop == StopReason.MAX_TOKENS && results.isEmpty()) {
                 emit(Event.Status("Ответ обрезан (лимит токенов)."))
-                return
+                return true
             }
             if (results.isEmpty()) {
                 emit(Event.Status("Готово"))
-                return
+                return true
             }
             history += MessageParam.ofUserOfContentBlockParams(results)
         }
         emit(Event.Status("Достигнут лимит шагов ($MAX_STEPS). Напиши «продолжай», чтобы продолжить."))
+        return true
     }
 
     private fun params(history: List<MessageParam>): MessageCreateParams =

@@ -22,6 +22,9 @@ class GeminiAgent(
 ) {
     private var switched = false
     private val box = ToolBox(st)
+
+    /** Retries on 429/5xx before giving up (lower in auto mode to switch faster). */
+    var retries = 3
     private val system = ToolBox.systemPrompt(st)
 
     class ApiException(val code: Int, message: String, val retryAfterS: Int) : IOException(message)
@@ -32,7 +35,7 @@ class GeminiAgent(
         images: List<ByteArray>,
         emit: (Agent.Event) -> Unit,
         cancelled: () -> Boolean,
-    ) {
+    ): Boolean {
         val start = history.length()
         fun rollback() { while (history.length() > start) history.remove(history.length() - 1) }
 
@@ -42,7 +45,7 @@ class GeminiAgent(
         history.put(JSONObject().put("role", "user").put("parts", parts))
 
         for (step in 1..Agent.MAX_STEPS) {
-            if (cancelled()) { emit(Agent.Event.Status("Остановлено")); return }
+            if (cancelled()) { emit(Agent.Event.Status("Остановлено")); return true }
             emit(Agent.Event.Status(if (step == 1) "Думаю…" else "Шаг $step…"))
 
             val resp = try {
@@ -50,11 +53,11 @@ class GeminiAgent(
             } catch (e: ApiException) {
                 rollback()
                 emit(Agent.Event.Status(friendly(e)))
-                return
+                return false
             } catch (e: Exception) {
                 rollback()
                 emit(Agent.Event.Status("Ошибка сети: ${e.message}"))
-                return
+                return false
             }
 
             val cand = resp.optJSONArray("candidates")?.optJSONObject(0)
@@ -65,7 +68,7 @@ class GeminiAgent(
                 rollback()
                 val block = resp.optJSONObject("promptFeedback")?.optString("blockReason").orEmpty()
                 emit(Agent.Event.Status("Gemini не ответил (${block.ifEmpty { finish.ifEmpty { "пустой ответ" } }}). Попробуй переформулировать."))
-                return
+                return false
             }
             if (!content.has("role")) content.put("role", "model")
             history.put(content)
@@ -90,12 +93,13 @@ class GeminiAgent(
             if (results.length() == 0) {
                 if (finish == "MAX_TOKENS") emit(Agent.Event.Status("Ответ обрезан (лимит токенов)."))
                 else emit(Agent.Event.Status("Готово"))
-                return
+                return true
             }
             shots.forEach { results.put(imagePart(it)) }
             history.put(JSONObject().put("role", "user").put("parts", results))
         }
         emit(Agent.Event.Status("Достигнут лимит шагов (${Agent.MAX_STEPS}). Напиши «продолжай»."))
+        return true
     }
 
     private fun exec(name: String, a: JSONObject, shots: MutableList<ByteArray>): Triple<String, String, Boolean> =
@@ -134,9 +138,9 @@ class GeminiAgent(
                     }
                 }
                 attempt++
-                if ((e.code == 429 || e.code == 503 || e.code == 500) && attempt <= 3) {
+                if ((e.code == 429 || e.code == 503 || e.code == 500) && attempt <= retries) {
                     val wait = e.retryAfterS.coerceIn(5, 60)
-                    emit(Agent.Event.Status("Лимит/перегрузка Gemini, жду $wait с… (попытка $attempt из 3)"))
+                    emit(Agent.Event.Status("Лимит/перегрузка Gemini, жду $wait с… (попытка $attempt из $retries)"))
                     Thread.sleep(wait * 1000L)
                 } else throw e
             }

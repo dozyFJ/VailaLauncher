@@ -23,6 +23,9 @@ class OpenAiAgent(
     private val screenshot: ((String) -> ByteArray?)? = null,
 ) {
     private val box = ToolBox(st)
+
+    /** Retries on 429/5xx before giving up (lower in auto mode to switch faster). */
+    var retries = 3
     private val system = ToolBox.systemPrompt(st) +
         if (vision) "" else "\nЭта модель не видит изображения: присланные фото доступны только как файлы по указанным путям, скриншоты view_site недоступны."
 
@@ -34,25 +37,25 @@ class OpenAiAgent(
         images: List<ByteArray>,
         emit: (Agent.Event) -> Unit,
         cancelled: () -> Boolean,
-    ) {
+    ): Boolean {
         val start = history.length()
         fun rollback() { while (history.length() > start) history.remove(history.length() - 1) }
         history.put(userMessage(userText, images))
 
         for (step in 1..Agent.MAX_STEPS) {
-            if (cancelled()) { emit(Agent.Event.Status("Остановлено")); return }
+            if (cancelled()) { emit(Agent.Event.Status("Остановлено")); return true }
             emit(Agent.Event.Status(if (step == 1) "Думаю…" else "Шаг $step…"))
             val resp = try {
                 callWithRetry(history, emit)
             } catch (e: ApiException) {
-                rollback(); emit(Agent.Event.Status(friendly(e))); return
+                rollback(); emit(Agent.Event.Status(friendly(e))); return false
             } catch (e: Exception) {
-                rollback(); emit(Agent.Event.Status("Ошибка сети: ${e.message}")); return
+                rollback(); emit(Agent.Event.Status("Ошибка сети: ${e.message}")); return false
             }
             val choice = resp.optJSONArray("choices")?.optJSONObject(0)
             val msg = choice?.optJSONObject("message")
             if (msg == null) {
-                rollback(); emit(Agent.Event.Status("Пустой ответ от модели. Попробуй ещё раз.")); return
+                rollback(); emit(Agent.Event.Status("Пустой ответ от модели. Попробуй ещё раз.")); return false
             }
             val content = msg.optString("content").takeUnless { msg.isNull("content") }.orEmpty()
             val calls = msg.optJSONArray("tool_calls")
@@ -66,7 +69,7 @@ class OpenAiAgent(
             if (calls == null || calls.length() == 0) {
                 if (choice.optString("finish_reason") == "length") emit(Agent.Event.Status("Ответ обрезан (лимит токенов)."))
                 else emit(Agent.Event.Status("Готово"))
-                return
+                return true
             }
             val shots = mutableListOf<ByteArray>()
             for (i in 0 until calls.length()) {
@@ -84,6 +87,7 @@ class OpenAiAgent(
             if (shots.isNotEmpty()) history.put(userMessage("Скриншот страницы:", shots))
         }
         emit(Agent.Event.Status("Достигнут лимит шагов (${Agent.MAX_STEPS}). Напиши «продолжай»."))
+        return true
     }
 
     private fun clip(s: String) =
@@ -129,8 +133,8 @@ class OpenAiAgent(
                 return call(history)
             } catch (e: ApiException) {
                 attempt++
-                if ((e.code == 429 || e.code >= 500) && attempt <= 3) {
-                    emit(Agent.Event.Status("Сервер занят или лимит, жду 15 с… (попытка $attempt из 3)"))
+                if ((e.code == 429 || e.code >= 500) && attempt <= retries) {
+                    emit(Agent.Event.Status("Сервер занят или лимит, жду 15 с… (попытка $attempt из $retries)"))
                     Thread.sleep(15_000)
                 } else throw e
             }
