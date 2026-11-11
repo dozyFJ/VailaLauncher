@@ -35,6 +35,7 @@ class ChatActivity : Activity() {
         val history = mutableListOf<MessageParam>()
         val geminiHistory = org.json.JSONArray()
         val glmHistory = org.json.JSONArray()
+        val localHistory = org.json.JSONArray()
         val transcript = mutableListOf<Pair<Int, String>>() // kind, text
         @Volatile var running = false
         @Volatile var cancel = false
@@ -131,7 +132,7 @@ class ChatActivity : Activity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
             1 -> if (!running) {
-                history.clear(); clearGemini(); clear(glmHistory); transcript.clear(); list.removeAllViews()
+                history.clear(); clearGemini(); clear(glmHistory); clear(localHistory); transcript.clear(); list.removeAllViews()
                 add(K_STATUS, "Новый чат.")
             }
             2 -> settings()
@@ -190,6 +191,19 @@ class ChatActivity : Activity() {
                     GeminiAgent(st, key, model, { path -> shot.capture(path) }) { m ->
                         prefs.edit().putString("gmodel", m).apply()
                     }.run(geminiHistory, text, images, emit) { cancel }
+                } else if (prov == "local") {
+                    val m = LocalLlm.selected(this)
+                    val f = LocalLlm.file(this, m)
+                    if (!f.exists()) {
+                        post(K_STATUS, "Модель не скачана. Меню ⋮ → «Ключ и модель» → «Локальный ИИ» → «Скачать».")
+                    } else {
+                        LocalLlm.ensure(st, f) { post(K_STATUS, it) }
+                        val extra = if (m.noThink) org.json.JSONObject().put("chat_template_kwargs",
+                            org.json.JSONObject().put("enable_thinking", false)) else null
+                        OpenAiAgent(st, LocalLlm.BASE, "local", m.id, vision = false, fast = false,
+                            extraBody = extra, maxToolChars = 3000) { path -> shot.capture(path) }
+                            .run(localHistory, text, images, emit) { cancel }
+                    }
                 } else if (prov == "glm") {
                     val vision = Regex("\\d+(\\.\\d+)?v").containsMatchIn(model) || "vision" in model
                     OpenAiAgent(st, OpenAiAgent.ZAI_BASE, key, model, vision, glmFast) { path -> shot.capture(path) }
@@ -354,8 +368,9 @@ class ChatActivity : Activity() {
 
     private fun provider() = prefs.getString("provider", "gemini") ?: "gemini"
     private fun isGemini() = provider() == "gemini"
-    private fun providerName() = when (provider()) { "gemini" -> "Gemini"; "glm" -> "GLM"; else -> "Claude" }
-    private fun currentKey() = prefs.getString(when (provider()) { "gemini" -> "gkey"; "glm" -> "zkey"; else -> "key" }, "").orEmpty()
+    private fun providerName() = when (provider()) { "gemini" -> "Gemini"; "glm" -> "GLM"; "local" -> "Локальный"; else -> "Claude" }
+    private fun currentKey() = if (provider() == "local") "local"
+        else prefs.getString(when (provider()) { "gemini" -> "gkey"; "glm" -> "zkey"; else -> "key" }, "").orEmpty()
     private fun clear(a: org.json.JSONArray) { while (a.length() > 0) a.remove(a.length() - 1) }
     private fun clearGemini() = clear(geminiHistory)
 
@@ -382,8 +397,9 @@ class ChatActivity : Activity() {
         val rbG = RadioButton(this).apply { text = "Google Gemini — бесплатно (с лимитами)"; id = 201 }
         val rbZ = RadioButton(this).apply { text = "GLM (Z.ai) — бесплатно, быстрый"; id = 203 }
         val rbC = RadioButton(this).apply { text = "Claude — платно, умнее"; id = 202 }
-        prov.addView(rbG); prov.addView(rbZ); prov.addView(rbC)
-        prov.check(when (provider()) { "gemini" -> 201; "glm" -> 203; else -> 202 })
+        val rbL = RadioButton(this).apply { text = "Локальный ИИ — на телефоне, офлайн, бесплатно"; id = 204 }
+        prov.addView(rbG); prov.addView(rbZ); prov.addView(rbL); prov.addView(rbC)
+        prov.check(when (provider()) { "gemini" -> 201; "glm" -> 203; "local" -> 204; else -> 202 })
         box.addView(prov)
 
         label("Google Gemini", true)
@@ -446,6 +462,39 @@ class ChatActivity : Activity() {
             box.addView(this)
         }
 
+        label("Локальный ИИ", true)
+        label("Память телефона: %.1f ГБ (без «расширения»). Модель скачивается один раз.".format(LocalLlm.totalRamGb(this)))
+        val lgroup = RadioGroup(this)
+        val lcur = LocalLlm.selected(this).id
+        LocalLlm.MODELS.forEachIndexed { i, m ->
+            val have = LocalLlm.file(this, m).exists()
+            lgroup.addView(RadioButton(this).apply {
+                text = m.title + if (have) "  ✓ скачана" else ""
+                id = 300 + i
+                isChecked = m.id == lcur
+            })
+        }
+        box.addView(lgroup)
+        val lRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        lRow.addView(Button(this).apply {
+            text = "Скачать"
+            isAllCaps = false
+            setOnClickListener {
+                val m = LocalLlm.MODELS[(lgroup.checkedRadioButtonId - 300).coerceIn(0, LocalLlm.MODELS.lastIndex)]
+                downloadModel(m)
+            }
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        lRow.addView(Button(this).apply {
+            text = "Удалить модели"
+            isAllCaps = false
+            setOnClickListener {
+                LocalLlm.stop()
+                LocalLlm.dir(this@ChatActivity).listFiles()?.forEach { it.delete() }
+                android.widget.Toast.makeText(this@ChatActivity, "Модели удалены", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        box.addView(lRow)
+
         label("Claude", true)
         label("Ключ: console.anthropic.com → API Keys (нужен баланс)")
         val ckey = keyField("key", "sk-ant-…")
@@ -466,7 +515,9 @@ class ChatActivity : Activity() {
             .setView(ScrollView(this).apply { addView(box) })
             .setPositiveButton("Сохранить") { _, _ ->
                 val idx = (group.checkedRadioButtonId - 100).coerceIn(0, models.lastIndex)
-                val newProv = when (prov.checkedRadioButtonId) { 202 -> "claude"; 203 -> "glm"; else -> "gemini" }
+                val newProv = when (prov.checkedRadioButtonId) { 202 -> "claude"; 203 -> "glm"; 204 -> "local"; else -> "gemini" }
+                val lm = LocalLlm.MODELS[(lgroup.checkedRadioButtonId - 300).coerceIn(0, LocalLlm.MODELS.lastIndex)]
+                prefs.edit().putString("lmodel", lm.id).apply()
                 prefs.edit()
                     .putString("provider", newProv)
                     .putString("gkey", gkey.text.toString().trim())
@@ -481,6 +532,42 @@ class ChatActivity : Activity() {
             }
             .setNegativeButton("Отмена", null)
             .show()
+    }
+
+    private fun downloadModel(m: LocalLlm.Model) {
+        if (LocalLlm.file(this, m).exists()) {
+            android.widget.Toast.makeText(this, "Уже скачана", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        var stop = false
+        @Suppress("DEPRECATION")
+        val pd = android.app.ProgressDialog(this).apply {
+            setTitle("Скачиваю ${m.title}")
+            setMessage("Лучше по Wi-Fi. Можно прервать и продолжить потом.")
+            setProgressStyle(android.app.ProgressDialog.STYLE_HORIZONTAL)
+            max = 100
+            setCancelable(false)
+            setButton(android.content.DialogInterface.BUTTON_NEGATIVE, "Прервать") { _, _ -> stop = true }
+            show()
+        }
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        Thread {
+            val r = runCatching {
+                LocalLlm.download(this, m, { have, total ->
+                    val t = if (total > 0) total else m.approxBytes
+                    runOnUiThread {
+                        pd.progress = (have * 100 / t).toInt().coerceIn(0, 100)
+                        pd.setMessage("%.0f / %.0f МБ".format(have / 1e6, t / 1e6))
+                    }
+                }) { stop }
+            }
+            runOnUiThread {
+                window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                pd.dismiss()
+                val msg = r.fold({ "Модель скачана ✅ Выбери «Локальный ИИ» и сохрани." }, { "Не скачалась: ${it.message}" })
+                AlertDialog.Builder(this).setMessage(msg).setPositiveButton("OK", null).show()
+            }
+        }.start()
     }
 
     private fun px(v: Int) = (v * dp).toInt()

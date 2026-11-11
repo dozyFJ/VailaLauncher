@@ -78,7 +78,8 @@ def main():
     pkgs, provides = parse(load_index())
 
     print("php packages:", " ".join(sorted(n for n in pkgs if n.startswith("php"))))
-    roots_pkgs = ["mariadb", "php"] + [n for n in ("php-gd",) if n in pkgs]
+    print("llama packages:", " ".join(sorted(n for n in pkgs if "llama" in n)))
+    roots_pkgs = ["mariadb", "php"] + [n for n in ("php-gd", "llama-cpp") if n in pkgs]
     want, queue = [], list(roots_pkgs)
     while queue:
         name = queue.pop(0)
@@ -134,6 +135,21 @@ def main():
                 shutil.copy(real, os.path.join(out_usr, "lib", "php", fn))
                 roots.append(real)
         print("php extensions:", sorted(os.listdir(os.path.join(out_usr, "lib", "php"))))
+    # llama.cpp server (local AI). ggml may dlopen CPU backends, so ship all of them.
+    llama = os.path.join(usr, "bin", "llama-server")
+    if os.path.exists(llama):
+        real = os.path.realpath(llama)
+        shutil.copy(real, os.path.join(out_usr, "bin", "llama-server"))
+        roots.append(real)
+        for fn in sorted(os.listdir(lib_dir)):
+            if re.match(r"lib(ggml|llama|mtmd)[\w.-]*\.so$", fn):
+                real = os.path.realpath(os.path.join(lib_dir, fn))
+                shutil.copy(real, os.path.join(out_usr, "lib", fn))
+                roots.append(real)
+                print("llama lib:", fn)
+    else:
+        print("  WARN: llama-server not found, local AI disabled")
+
     cert = os.path.join(usr, "etc", "tls", "cert.pem")
     if os.path.exists(cert):
         os.makedirs(os.path.join(out_usr, "etc", "tls"), exist_ok=True)

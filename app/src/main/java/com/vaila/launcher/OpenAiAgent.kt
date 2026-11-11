@@ -18,6 +18,8 @@ class OpenAiAgent(
     private val model: String,
     private val vision: Boolean,
     private val fast: Boolean,
+    private val extraBody: JSONObject? = null,
+    private val maxToolChars: Int = ToolBox.MAX_OUTPUT,
     private val screenshot: ((String) -> ByteArray?)? = null,
 ) {
     private val box = ToolBox(st)
@@ -76,13 +78,16 @@ class OpenAiAgent(
                 emit(Agent.Event.Tool(title, out, err))
                 history.put(
                     JSONObject().put("role", "tool").put("tool_call_id", c.optString("id"))
-                        .put("content", (if (err) "ОШИБКА: " else "") + out.ifEmpty { "(пусто)" })
+                        .put("content", (if (err) "ОШИБКА: " else "") + clip(out.ifEmpty { "(пусто)" }))
                 )
             }
             if (shots.isNotEmpty()) history.put(userMessage("Скриншот страницы:", shots))
         }
         emit(Agent.Event.Status("Достигнут лимит шагов (${Agent.MAX_STEPS}). Напиши «продолжай»."))
     }
+
+    private fun clip(s: String) =
+        if (s.length <= maxToolChars) s else s.take(maxToolChars) + "\n…(обрезано: смотри файл по частям через start_line/end_line или grep)"
 
     private fun userMessage(text: String, images: List<ByteArray>): JSONObject {
         if (images.isEmpty() || !vision) return JSONObject().put("role", "user").put("content", text)
@@ -142,6 +147,7 @@ class OpenAiAgent(
             .put("tool_choice", "auto")
             .put("max_tokens", 8192)
         if (fast) body.put("thinking", JSONObject().put("type", "disabled"))
+        extraBody?.keys()?.forEach { k -> body.put(k, extraBody.get(k)) }
         val c = URL(baseUrl.trimEnd('/') + "/chat/completions").openConnection() as HttpURLConnection
         c.requestMethod = "POST"
         c.connectTimeout = 30_000
@@ -163,6 +169,7 @@ class OpenAiAgent(
         429 -> "Лимит запросов исчерпан: ${e.message?.take(200)}. Подожди немного и повтори."
         401, 403 -> "Ключ не подходит (${e.code}): ${e.message}"
         404 -> "Модель «$model» не найдена: ${e.message}"
+        400 -> if ("context" in e.message.orEmpty().lowercase()) "Разговор не влезает в память модели. Начни «Новый чат» (меню ⋮)." else "Ошибка API 400: ${e.message}"
         else -> "Ошибка API ${e.code}: ${e.message}"
     }
 
