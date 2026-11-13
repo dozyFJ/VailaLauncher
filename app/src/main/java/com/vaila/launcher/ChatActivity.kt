@@ -219,12 +219,12 @@ class ChatActivity : Activity() {
         fun has(k: String) = !prefs.getString(k, "").isNullOrBlank()
         val localReady = LocalLlm.MODELS.any { LocalLlm.file(this, it).exists() }
         val ps = listOf(
+            P("openai", "ChatGPT (OpenAI API)", has("oakey")),
             P("auto", "🔄 Авто — лучшая бесплатная", true),
             P("glm", "GLM (Z.ai) — бесплатно", has("zkey")),
             P("gemini", "Gemini — бесплатно", has("gkey")),
             P("openrouter", "OpenRouter — бесплатно", has("orkey")),
             P("local", "Локальный — офлайн", localReady),
-            P("openai", "ChatGPT — платно", has("oakey")),
             P("claude", "Claude — платно", has("key")),
         )
         val items = ps.map { (if (it.id == provider()) "● " else "   ") + it.label + if (it.ready) "" else "  (нет ключа)" }
@@ -497,7 +497,7 @@ class ChatActivity : Activity() {
         return "image/catalog/uploads/$name" to jpg
     }
 
-    private fun provider() = prefs.getString("provider", "auto") ?: "auto"
+    private fun provider() = prefs.getString("provider", "openai") ?: "openai"
     /** Tries free providers in turn and switches on errors or limits. */
     private fun runAuto(st: Stack, text: String, images: List<ByteArray>, emit: (Agent.Event) -> Unit, shot: SiteShot) {
         val vision = images.isNotEmpty()
@@ -600,10 +600,10 @@ class ChatActivity : Activity() {
         val rbZ = RadioButton(this).apply { text = "GLM (Z.ai) — бесплатно, быстрый"; id = 203 }
         val rbC = RadioButton(this).apply { text = "Claude — платно, умнее"; id = 202 }
         val rbL = RadioButton(this).apply { text = "Локальный ИИ — на телефоне, офлайн, бесплатно"; id = 204 }
-        val rbA = RadioButton(this).apply { text = "🔄 Авто — сам выбирает лучшую бесплатную и переключается (рекомендуется)"; id = 205 }
+        val rbA = RadioButton(this).apply { text = "🔄 Авто — сам выбирает лучшую бесплатную и переключается"; id = 205 }
         val rbO = RadioButton(this).apply { text = "OpenRouter — лучшая бесплатная модель из каталога"; id = 206 }
         val rbP = RadioButton(this).apply { text = "ChatGPT (OpenAI API) — платно"; id = 207 }
-        prov.addView(rbA); prov.addView(rbG); prov.addView(rbZ); prov.addView(rbO); prov.addView(rbL); prov.addView(rbP); prov.addView(rbC)
+        prov.addView(rbP); prov.addView(rbA); prov.addView(rbG); prov.addView(rbZ); prov.addView(rbO); prov.addView(rbL); prov.addView(rbC)
         prov.check(when (provider()) { "auto" -> 205; "gemini" -> 201; "glm" -> 203; "local" -> 204; "openrouter" -> 206; "openai" -> 207; else -> 202 })
         label("«Авто» использует все бесплатные ключи ниже и скачанную локальную модель: если одна упрётся в лимит, сразу переключится на другую.")
         val autoLocal = android.widget.CheckBox(this).apply {
@@ -744,7 +744,7 @@ class ChatActivity : Activity() {
         box.addView(lRow)
 
         label("ChatGPT (OpenAI API)", true)
-        label("Ключ: platform.openai.com → API keys. Платно, отдельно от подписки ChatGPT.")
+        label("Ключ: platform.openai.com → API keys. Платно, отдельно от подписки ChatGPT. Лимиты и баланс задаются в OpenAI API.")
         val oakey = keyField("oakey", "sk-…")
         val oamodel = EditText(this).apply {
             hint = OpenAiAgent.OPENAI_DEFAULT_MODEL

@@ -38,7 +38,7 @@ class OpenAiAgent(
     private val system = ToolBox.systemPrompt(st) +
         if (vision) "" else "\nЭта модель не видит изображения: присланные фото доступны только как файлы по указанным путям; view_site вернёт текстовое описание страницы."
 
-    class ApiException(val code: Int, message: String) : IOException(message)
+    class ApiException(val code: Int, message: String, val errorCode: String? = null) : IOException(message)
 
     fun run(
         history: JSONArray,
@@ -163,7 +163,7 @@ class OpenAiAgent(
                     }
                 }
                 attempt++
-                if ((e.code == 429 || e.code >= 500) && attempt <= retries) {
+                if ((e.code == 429 || e.code >= 500) && e.errorCode != "insufficient_quota" && attempt <= retries) {
                     emit(Agent.Event.Status("Сервер занят или лимит, жду 15 с… (попытка $attempt из $retries)"))
                     Thread.sleep(15_000)
                 } else throw e
@@ -194,13 +194,16 @@ class OpenAiAgent(
         val text = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.readText().orEmpty()
         if (code !in 200..299) {
             val err = runCatching { JSONObject(text).getJSONObject("error") }.getOrNull()
-            throw ApiException(code, err?.optString("message")?.ifBlank { null } ?: text.take(500))
+            throw ApiException(code, err?.optString("message")?.ifBlank { null } ?: text.take(500),
+                err?.optString("code"))
         }
         return JSONObject(text)
     }
 
     private fun friendly(e: ApiException) = when (e.code) {
-        429 -> "Лимит запросов исчерпан: ${e.message?.take(200)}. Подожди немного и повтори."
+        429 -> if (e.errorCode == "insufficient_quota")
+            "Недостаточно квоты OpenAI API. Проверь баланс и бюджет на platform.openai.com. Подписка ChatGPT не оплачивает API."
+        else "Лимит запросов: ${e.message?.take(200)}. Подожди немного и повтори."
         401, 403 -> "Ключ не подходит (${e.code}): ${e.message}"
         404 -> "Модель «$model» не найдена: ${e.message}"
         400 -> if ("context" in e.message.orEmpty().lowercase()) "Разговор не влезает в память модели. Начни «Новый чат» (меню ⋮)." else "Ошибка API 400: ${e.message}"
